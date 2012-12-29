@@ -105,6 +105,7 @@
       <StripPrivateSymbols>..\rundir\pdb32\stripped\$(TargetName).pdb</StripPrivateSymbols>
       <SubSystem>Windows</SubSystem>
       <TargetMachine>MachineX86</TargetMachine>
+      <ImageHasSafeExceptionHandlers>true</ImageHasSafeExceptionHandlers>
     </Link>
     <PostBuildEvent>
       <Command>copy $(OutDir)$(ProjectName).dll ..\rundir</Command>

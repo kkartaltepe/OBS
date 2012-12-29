@@ -14,13 +14,13 @@
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav</Extensions>
     </Filter>
     <Filter Include="Utility">
-      <UniqueIdentifier>{bee9172e-04bb-42ef-829b-a3540cdff24c}</UniqueIdentifier>
+      <UniqueIdentifier>{a76c7bc2-26b1-44a6-971d-89207d6958e3}</UniqueIdentifier>
     </Filter>
     <Filter Include="Utility\Source">
-      <UniqueIdentifier>{fee34829-e00c-4fc3-bc58-aaaa427065fd}</UniqueIdentifier>
+      <UniqueIdentifier>{9965b186-305e-4b5a-be73-7dc4e80013fa}</UniqueIdentifier>
     </Filter>
     <Filter Include="Utility\Headers">
-      <UniqueIdentifier>{0f7d7e49-47ee-45ea-b933-e3d91378dee7}</UniqueIdentifier>
+      <UniqueIdentifier>{709d96c6-4bd3-4470-90ce-c36c369f0f22}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>

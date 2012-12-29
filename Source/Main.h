@@ -39,6 +39,7 @@
 // direct3d 10.1
 
 #include <D3D10_1.h>
+#include <D3D10.h>
 #include <D3DX10.h>
 #include <DXGI.h>
 

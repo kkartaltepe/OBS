@@ -14,7 +14,7 @@
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav</Extensions>
     </Filter>
     <Filter Include="Shaders">
-      <UniqueIdentifier>{d6220ab9-62ff-480a-a648-eae92d96eab1}</UniqueIdentifier>
+      <UniqueIdentifier>{7f2125f2-2bfc-4c05-9c45-15f13d4ef706}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
