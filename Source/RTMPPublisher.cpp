@@ -406,6 +406,7 @@ DWORD WINAPI RTMPPublisher::CreateConnectionThread(RTMPPublisher *publisher)
     String strBindIP;
 
     int    serviceID    = AppConfig->GetInt   (TEXT("Publish"), TEXT("Service"));
+	bool LivestreamStyleUrl	= false;
     String strURL       = AppConfig->GetString(TEXT("Publish"), TEXT("URL"));
     String strPlayPath  = AppConfig->GetString(TEXT("Publish"), TEXT("PlayPath"));
 
@@ -441,6 +442,8 @@ DWORD WINAPI RTMPPublisher::CreateConnectionThread(RTMPPublisher *publisher)
             goto end;
         }
 
+		LivestreamStyleUrl = service->GetInt(TEXT("LivestreamStyleUrl"));
+
         XElement *servers = service->GetElement(TEXT("servers"));
         if(!servers)
         {
@@ -457,6 +460,19 @@ DWORD WINAPI RTMPPublisher::CreateConnectionThread(RTMPPublisher *publisher)
         Log(TEXT("Using RTMP service: %s"), service->GetName());
         Log(TEXT("  Server selection: %s"), strURL);
     }
+
+    //------------------------------------------------------
+		
+	
+	if(LivestreamStyleUrl){
+		String channelName, username, password;
+		channelName = AppConfig->GetString(TEXT("Publish"), TEXT("ChannelName"));
+		username = AppConfig->GetString(TEXT("Publish"), TEXT("Username"));
+		password = AppConfig->GetString(TEXT("Publish"), TEXT("Password"));
+
+		strURL = strURL + "/" + channelName + "/username=" + username + "/password=" + password + "/isAutoLive=true";
+		Log(TEXT("  Livestream Test URL: %s"), strURL);
+	}
 
     //------------------------------------------------------
 

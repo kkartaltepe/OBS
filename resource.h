@@ -37,7 +37,6 @@
 #define IDC_USERNAME                    1009
 #define IDC_STREAMKEY                   1011
 #define IDC_PLAYPATH                    1011
-#define IDC_CHANNELNAME                 1012
 #define IDC_QUALITY                     1012
 #define IDC_URL                         1012
 #define IDC_SERVER                      1013
@@ -85,13 +84,11 @@
 #define IDC_FORCEMONO                   1042
 #define IDC_SCROLLSPEED                 1042
 #define IDC_OPACITY2                    1042
-#define IDC_CHANNELNAME_STATIC          1043
 #define IDC_EXTENTWIDTH_EDIT            1043
 #define IDC_URL_STATIC                  1043
 #define IDC_PLAYPATH_STATIC             1044
 #define IDC_SCROLLSPEED3                1044
 #define IDC_EXTENTHEIGHT_EDIT           1044
-#define IDC_USERNAME_STATIC             1045
 #define IDC_SAVETOFILE                  1045
 #define IDC_SERVER_STATIC               1046
 #define IDC_SERVICE_STATIC              1047
@@ -207,6 +204,11 @@
 #define IDC_USECBR                      1133
 #define IDC_COMBO1                      1139
 #define IDC_DISABLECTSADJUST            1140
+#define IDC_PASSWORD					1141
+#define IDC_PASSWORD_STATIC				1142
+#define IDC_USERNAME_STATIC             1143
+#define IDC_CHANNELNAME                 1144
+#define IDC_CHANNELNAME_STATIC          1145
 #define IDA_SOURCE_MOVEUP               40018
 #define IDA_SOURCE_MOVEDOWN             40019
 #define IDA_SOURCE_MOVETOTOP            40020
@@ -237,7 +239,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        141
 #define _APS_NEXT_COMMAND_VALUE         40044
-#define _APS_NEXT_CONTROL_VALUE         1141
+#define _APS_NEXT_CONTROL_VALUE         1146
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

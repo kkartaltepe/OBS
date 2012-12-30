@@ -394,6 +394,58 @@ String LoadSettingTextComboString(HWND hwnd, CTSTR lpConfigSection, CTSTR lpConf
     return strVal;
 }
 
+void toggleStreamSettings(HWND hwnd, int service){
+	switch(service){
+	case 0://Custom FMS URL
+		ShowWindow(GetDlgItem(hwnd, IDC_URL), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_URL_STATIC), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_PLAYPATH), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_PLAYPATH_STATIC), SW_SHOW);
+		
+		ShowWindow(GetDlgItem(hwnd, IDC_PASSWORD), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_USERNAME), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_CHANNELNAME), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_PASSWORD_STATIC), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_USERNAME_STATIC), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_CHANNELNAME_STATIC), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_SERVERLIST), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_SERVER_STATIC), SW_HIDE);
+		break;
+	case 1: //Passkey services
+		ShowWindow(GetDlgItem(hwnd, IDC_SERVERLIST), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_SERVER_STATIC), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_PLAYPATH), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_PLAYPATH_STATIC), SW_SHOW);
+
+		ShowWindow(GetDlgItem(hwnd, IDC_PASSWORD), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_USERNAME), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_CHANNELNAME), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_PASSWORD_STATIC), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_USERNAME_STATIC), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_CHANNELNAME_STATIC), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_URL), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_URL_STATIC), SW_HIDE);
+		break;
+	case 2://UserPassChannel services
+		ShowWindow(GetDlgItem(hwnd, IDC_PASSWORD), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_USERNAME), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_CHANNELNAME), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_PASSWORD_STATIC), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_USERNAME_STATIC), SW_SHOW);
+		ShowWindow(GetDlgItem(hwnd, IDC_CHANNELNAME_STATIC), SW_SHOW);
+
+		ShowWindow(GetDlgItem(hwnd, IDC_PLAYPATH), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_PLAYPATH_STATIC), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_SERVERLIST), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_SERVER_STATIC), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_URL), SW_HIDE);
+		ShowWindow(GetDlgItem(hwnd, IDC_URL_STATIC), SW_HIDE);
+		break;
+	default:
+		break;
+	}
+}
+
 
 CTSTR preset_names[7] = {TEXT("ultrafast"), TEXT("superfast"), TEXT("veryfast"), TEXT("faster"), TEXT("fast"), TEXT("medium"), TEXT("slow")};
 
@@ -610,13 +662,12 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
 
                 if(serviceID == 0) //custom
                 {
-                    ShowWindow(GetDlgItem(hwnd, IDC_SERVERLIST), SW_HIDE);
+                    toggleStreamSettings(hwnd, 0);
                     hwndTemp = GetDlgItem(hwnd, IDC_URL);
                     LoadSettingEditString(hwndTemp, TEXT("Publish"), TEXT("URL"), NULL);
                 }
                 else
                 {
-                    ShowWindow(GetDlgItem(hwnd, IDC_URL), SW_HIDE);
                     hwndTemp = GetDlgItem(hwnd, IDC_SERVERLIST);
 
                     XElement *services = serverData.GetElement(TEXT("services"));
@@ -635,6 +686,15 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                                     SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)server->GetName());
                                 }
                             }
+
+							if(service->GetInt(TEXT("LivestreamStyleUrl"))){
+								toggleStreamSettings(hwnd, 2);
+								LoadSettingEditString(GetDlgItem(hwnd, IDC_USERNAME), TEXT("Publish"), TEXT("Username"), NULL);
+								LoadSettingEditString(GetDlgItem(hwnd, IDC_PASSWORD), TEXT("Publish"), TEXT("Password"), NULL);
+								LoadSettingEditString(GetDlgItem(hwnd, IDC_CHANNELNAME), TEXT("Publish"), TEXT("ChannelName"), NULL);
+							}else {
+								toggleStreamSettings(hwnd, 1);
+							}
                         }
                     }
 
@@ -843,11 +903,7 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
 
                             if(serviceID == 0)
                             {
-                                ShowWindow(GetDlgItem(hwnd, IDC_SERVERLIST), SW_HIDE);
-                                ShowWindow(GetDlgItem(hwnd, IDC_URL), SW_SHOW);
-
-                                SetWindowText(GetDlgItem(hwnd, IDC_URL), NULL);
-                                SetWindowText(GetDlgItem(hwnd, IDC_DASHBOARDLINK), NULL);
+                                toggleStreamSettings(hwnd, 0); //Custom FMS-URL
                             }
                             else
                             {
@@ -876,6 +932,12 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                                                     SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)server->GetName());
                                                 }
                                             }
+
+											if(service->GetInt(TEXT("LivestreamStyleUrl"))){
+												toggleStreamSettings(hwnd, 2);
+											}else {
+												toggleStreamSettings(hwnd, 1);
+											}
                                         }
                                     }
                                 }
@@ -884,7 +946,9 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                             }
 
                             SetWindowText(GetDlgItem(hwnd, IDC_PLAYPATH), NULL);
-
+							SetWindowText(GetDlgItem(hwnd, IDC_USERNAME), NULL);
+							SetWindowText(GetDlgItem(hwnd, IDC_PASSWORD), NULL);
+							SetWindowText(GetDlgItem(hwnd, IDC_CHANNELNAME), NULL);
                             bDataChanged = true;
                         }
                         break;
@@ -985,6 +1049,9 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                         break;
 
                     case IDC_PLAYPATH:
+					case IDC_USERNAME:
+					case IDC_PASSWORD:
+					case IDC_CHANNELNAME:
                     case IDC_URL:
                     case IDC_SAVEPATH:
                         if(HIWORD(wParam) == EN_CHANGE)
@@ -1029,7 +1096,6 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
     }
     return FALSE;
 }
-
 
 const int multiplierCount = 5;
 const float downscaleMultipliers[multiplierCount] = {1.0f, 1.5f, 2.0f, 2.25f, 3.0f};
@@ -1857,6 +1923,14 @@ void OBS::ApplySettings()
                     strTemp = GetCBText(GetDlgItem(hwndCurrentSettings, IDC_SERVERLIST));
                     AppConfig->SetString(TEXT("Publish"), TEXT("URL"), strTemp);
                 }
+
+				String username  = GetEditText(GetDlgItem(hwndCurrentSettings, IDC_USERNAME)); 
+				String password = GetEditText(GetDlgItem(hwndCurrentSettings, IDC_PASSWORD));
+				String channelName = GetEditText(GetDlgItem(hwndCurrentSettings, IDC_CHANNELNAME));
+				//strTemp = strTemp + "/" + channelName + "/username=" + username + "/password=" + password + "/isAutoLive=true";
+				AppConfig->SetString(TEXT("Publish"), TEXT("Password"), password);
+				AppConfig->SetString(TEXT("Publish"), TEXT("Username"), username);
+				AppConfig->SetString(TEXT("Publish"), TEXT("ChannelName"), channelName);
 
                 //------------------------------------------
 
