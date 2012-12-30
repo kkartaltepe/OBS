@@ -406,7 +406,7 @@ DWORD WINAPI RTMPPublisher::CreateConnectionThread(RTMPPublisher *publisher)
     String strBindIP;
 
     int    serviceID    = AppConfig->GetInt   (TEXT("Publish"), TEXT("Service"));
-	bool LivestreamStyleUrl	= false;
+	int LivestreamStyleUrl	= false;
     String strURL       = AppConfig->GetString(TEXT("Publish"), TEXT("URL"));
     String strPlayPath  = AppConfig->GetString(TEXT("Publish"), TEXT("PlayPath"));
 
