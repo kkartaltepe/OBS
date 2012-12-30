@@ -443,6 +443,9 @@ DWORD WINAPI RTMPPublisher::CreateConnectionThread(RTMPPublisher *publisher)
         }
 
 		LivestreamStyleUrl = service->GetInt(TEXT("LivestreamStyleUrl"));
+		if(LivestreamStyleUrl){ //The playpath should be known and associated with the service. (At least it is with livestream)
+			strPlayPath = service->GetString(TEXT("PlayPath"));
+		}
 
         XElement *servers = service->GetElement(TEXT("servers"));
         if(!servers)

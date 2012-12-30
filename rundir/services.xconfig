@@ -40,9 +40,10 @@ services : {
     }
   }
   Livestream.com : {
-	LivestreamStyleUrl : 1
+	LivestreamStyleUrl : 1,
+	PlayPath : "livestream",
 	servers : {
-      "Mogulus"  : rtmp://publish.livestream.com/mogulus
+      Mogulus : rtmp://publish.livestream.com/mogulus
     }
   }
 }
