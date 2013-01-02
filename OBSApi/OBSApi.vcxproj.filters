@@ -1,0 +1,156 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Headers">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="Resources">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav</Extensions>
+    </Filter>
+    <Filter Include="Utility">
+      <UniqueIdentifier>{b2e2acf9-9714-401d-b950-6e7af03e9505}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Utility\Source">
+      <UniqueIdentifier>{53abeead-d56e-4189-bf19-83e13d34d529}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Utility\Headers">
+      <UniqueIdentifier>{21041f43-a4d4-45a1-9150-5c9cec43d902}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="AudioSource.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="ColorControl.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="GraphicsSystem.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="HotkeyControlEx.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="OBSApi.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Scene.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\ConfigFile.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\DebugAlloc.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\FastAlloc.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\Profiler.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\utf8.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\XConfig.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\XFile_Windows.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\XMath.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\XString.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\XT.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\XT_Windows.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\XTLocalization.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="APIInterface.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="AudioSource.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="ColorControl.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="GraphicsSystem.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="HotkeyControlEx.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="OBSApi.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Scene.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\Alloc.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\ConfigFile.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\DebugAlloc.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\Defs.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\FastAlloc.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\Inline.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\Profiler.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\Serializer.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\Template.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\utf8.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\XConfig.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\XFile.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\XMath.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\XString.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\XT.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\XT_Windows.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="Utility\XTLocalization.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

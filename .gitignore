@@ -20,3 +20,8 @@ x64/
 *.zip
 *.lnk
 *.chm
+_UpgradeReport_Files/*
+UpgradeLog*.htm
+UpgradeLog*.XML
+*.opensdf
+*.sdf
