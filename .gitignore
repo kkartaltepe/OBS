@@ -32,3 +32,4 @@ rundir/*
 *.opensdf
 UpgradeLog*.htm
 UpgradeLog*.XML
+*.sdf
