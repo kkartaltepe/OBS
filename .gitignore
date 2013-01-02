@@ -1,11 +1,12 @@
-*.obj
-
-#ignore thumbnails created by windows
-Thumbs.db
-#Ignore files build by Visual Studio
 *.exe
-*.pdb
-*.user
+*.dll
+
+tests and backups/
+publish/
+Release/
+Debug/
+x64/
+
 *.aps
 *.pch
 *.vspscc
@@ -13,23 +14,14 @@ Thumbs.db
 *_p.c
 *.ncb
 *.suo
-*.tlb
-*.tlh
-*.bak
-*.cache
-*.ilk
-*.log
-[Bb]in
-[Dd]ebug*/
-*.lib
-*.sbr
-obj/
-[Rr]elease*/
-_ReSharper*/
-[Tt]est[Rr]esult*
-_UpgradeReport_Files/*
-rundir/*
-*.opensdf
-UpgradeLog*.htm
-UpgradeLog*.XML
-*.sdf
+*.ncb
+*.user
+*.o
+*.obj
+*.pdb
+*.res
+*.manifest
+*.dep
+*.zip
+*.lnk
+*.chm

@@ -686,6 +686,11 @@ String XConfig::ProcessString(TSTR &lpTemp)
     *lpTemp = backupChar;
 
     String stringOut = string.Mid(1, string.Length()-1);
+    if (!stringOut)
+        return String();
+
+    if(stringOut.IsEmpty())
+        return String();
 
     TSTR lpStringOut = stringOut;
     while(*lpStringOut != 0 && (lpStringOut = schr(lpStringOut, '\\')) != 0)
@@ -697,6 +702,7 @@ String XConfig::ProcessString(TSTR &lpTemp)
             case 't':   *lpStringOut = '\t'; scpy(lpStringOut+1, lpStringOut+2); break;
             case 'r':   *lpStringOut = '\r'; scpy(lpStringOut+1, lpStringOut+2); break;
             case 'n':   *lpStringOut = '\n'; scpy(lpStringOut+1, lpStringOut+2); break;
+            case '/':   *lpStringOut = '/';  scpy(lpStringOut+1, lpStringOut+2); break;
             case '\\':  scpy(lpStringOut+1, lpStringOut+2); break;
         }
 
@@ -726,7 +732,8 @@ bool  XConfig::ReadFileData(XElement *curElement, int level, TSTR &lpTemp)
                 *lpTemp != L'　' &&
                 *lpTemp != '\t'  &&
                 *lpTemp != '\r'  &&
-                *lpTemp != '\n'  )
+                *lpTemp != '\n'  &&
+                *lpTemp != ',')
         {
             String strName;
 

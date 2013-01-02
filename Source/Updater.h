@@ -1,6 +1,6 @@
 /********************************************************************************
- Copyright (C) 2012 Bill Hamilton
-                    Hugh Bailey <obs.jim@gmail.com>
+ Copyright (C) 2012 Hugh Bailey <obs.jim@gmail.com>
+                    Richard Stanway
 
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -17,15 +17,4 @@
  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
 ********************************************************************************/
 
-
-#pragma once
-
-#define VOLUME_METER_CLASS TEXT("OBSVolumeMeter")
-
-void InitVolumeMeter();
-float SetVolumeMeterValue(HWND hwnd, float fValue, float fMax, float fPeak);
-
-#define VOL_MIN -96
-#define VOL_MAX 0
-
-#define VOLN_METERED  0x302
+DWORD WINAPI CheckUpdateThread(VOID *arg);
