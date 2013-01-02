@@ -217,6 +217,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="CaptureFilter.cpp" />
+    <ClCompile Include="DeviceAudio.cpp" />
     <ClCompile Include="DeviceSource.cpp" />
     <ClCompile Include="DShowPlugin.cpp" />
     <ClCompile Include="ImageMadness.cpp" />

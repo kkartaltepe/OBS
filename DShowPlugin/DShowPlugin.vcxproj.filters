@@ -33,6 +33,9 @@
     <ClCompile Include="MediaInfoStuff.cpp">
       <Filter>Source</Filter>
     </ClCompile>
+    <ClCompile Include="DeviceAudio.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CaptureFilter.h">
