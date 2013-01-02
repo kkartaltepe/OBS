@@ -19,6 +19,7 @@
 
 #include "Main.h"
 #include <winhttp.h>
+#pragma comment(lib, "winhttp.lib")
 
 BOOL HTTPGetFile (CTSTR url, CTSTR outputPath, CTSTR extraHeaders, int *responseCode)
 {

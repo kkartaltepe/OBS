@@ -244,6 +244,7 @@
     <ClCompile Include="Source\GetAudioDevices.cpp" />
     <ClCompile Include="Source\GlobalSource.cpp" />
     <ClCompile Include="Source\Hacks.cpp" />
+    <ClCompile Include="Source\HTTPClient.cpp" />
     <ClCompile Include="Source\ImageProcessing.cpp" />
     <ClCompile Include="Source\libnsgif.c" />
     <ClCompile Include="Source\Main.cpp" />
@@ -255,6 +256,7 @@
     <ClCompile Include="Source\RTMPStuff.cpp" />
     <ClCompile Include="Source\Settings.cpp" />
     <ClCompile Include="Source\TextOutputSource.cpp" />
+    <ClCompile Include="Source\Updater.cpp" />
     <ClCompile Include="Source\VolumeControl.cpp" />
     <ClCompile Include="Source\VolumeMeter.cpp" />
     <ClCompile Include="Source\WindowStuff.cpp" />
@@ -263,12 +265,14 @@
     <ClInclude Include="Source\CodeTokenizer.h" />
     <ClInclude Include="Source\CrashDumpHandler.h" />
     <ClInclude Include="Source\D3D10System.h" />
+    <ClInclude Include="Source\HTTPClient.h" />
     <ClInclude Include="Source\libnsgif.h" />
     <ClInclude Include="Source\Main.h" />
     <ClInclude Include="Source\OBS.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="Source\RTMPPublisher.h" />
     <ClInclude Include="Source\RTMPStuff.h" />
+    <ClInclude Include="Source\Updater.h" />
     <ClInclude Include="Source\VolumeControl.h" />
     <ClInclude Include="Source\VolumeMeter.h" />
     <ClInclude Include="Source\WindowStuff.h" />
