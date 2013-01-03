@@ -38,6 +38,17 @@ VOID HashToString (BYTE *in, TCHAR *out)
     out[40] = 0;
 }
 
+VOID GenerateGUID(String &strGUID)
+{
+    BYTE junk[20];
+
+    if (!CryptGenRandom(hProvider, sizeof(junk), junk))
+        return;
+    
+    strGUID.SetLength(41);
+    HashToString(junk, strGUID.Array());
+}
+
 BOOL CalculateFileHash (TCHAR *path, BYTE *hash)
 {
     BYTE buff[65536];
@@ -110,31 +121,6 @@ BOOL FetchUpdaterModule()
     return TRUE;
 }
 
-BOOL IsSafeFilename (CTSTR path)
-{
-    const TCHAR *p;
-
-    p = path;
-
-    if (!*p)
-       return FALSE;
-
-    if (sstr(path, TEXT("..")))
-        return FALSE;
-
-    if (*p == '/')
-        return FALSE;
-
-    while (*p)
-    {
-        if (!isalnum(*p) && *p != '.' && *p != '/' && *p != '_')
-            return FALSE;
-        p++;
-    }
-
-    return TRUE;
-}
-
 BOOL IsSafePath (CTSTR path)
 {
     const TCHAR *p;
@@ -185,7 +171,7 @@ BOOL ParseUpdateManifest (TCHAR *path, BOOL *updatesAvailable, String &descripti
 
         if (scmp(platform, TEXT("all")))
         {
-#ifdef WIN32
+#ifndef _WIN64
             if (scmp(platform, TEXT("Win32")))
                 continue;
 #else
@@ -281,6 +267,8 @@ BOOL ParseUpdateManifest (TCHAR *path, BOOL *updatesAvailable, String &descripti
 
     if (bestPriority <= 5)
         *updatesAvailable = TRUE;
+    else
+        *updatesAvailable = FALSE;
 
     return TRUE;
 }
@@ -300,6 +288,8 @@ DWORD WINAPI CheckUpdateThread (VOID *arg)
         return 1;
     }
 
+    extraHeaders[0] = 0;
+
     if (CalculateFileHash(manifestPath, manifestHash))
     {
         TCHAR hashString[41];
@@ -308,8 +298,26 @@ DWORD WINAPI CheckUpdateThread (VOID *arg)
 
         tsprintf_s (extraHeaders, _countof(extraHeaders)-1, TEXT("If-None-Match: %s"), hashString);
     }
-    else
-        extraHeaders[0] = 0;
+    
+    //this is an arbitrary random number that we use to count the number of unique OBS installations
+    //and is not associated with any kind of identifiable information
+    String strGUID = GlobalConfig->GetString(TEXT("General"), TEXT("InstallGUID"));
+    if (strGUID.IsEmpty())
+    {
+        GenerateGUID(strGUID);
+
+        if (strGUID.IsValid())
+            GlobalConfig->SetString(TEXT("General"), TEXT("InstallGUID"), strGUID);
+    }
+
+    if (strGUID.IsValid())
+    {
+        if (extraHeaders[0])
+            scat(extraHeaders, TEXT("\n"));
+
+        scat(extraHeaders, TEXT("X-OBS-GUID: "));
+        scat(extraHeaders, strGUID);
+    }
 
     if (HTTPGetFile(TEXT("https://obsproject.com/update/packages.xconfig"), manifestPath, extraHeaders, &responseCode))
     {
@@ -351,7 +359,7 @@ DWORD WINAPI CheckUpdateThread (VOID *arg)
 
                         execInfo.cbSize = sizeof(execInfo);
                         execInfo.lpFile = updateFilePath;
-#ifdef WIN32
+#ifndef _WIN64
                         execInfo.lpParameters = TEXT("Win32");
 #else
                         execInfo.lpParameters = TEXT("Win64");

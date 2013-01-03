@@ -51,13 +51,13 @@ BOOL XFile::Open(CTSTR lpFile, DWORD dwAccess, DWORD dwCreationDisposition)
     {
         dwFileAccess |= GENERIC_READ;
         if(dwAccess & XFILE_SHARED)
-            dwShareAccess |= FILE_SHARE_READ;
+            dwShareAccess |= FILE_SHARE_READ | FILE_SHARE_WRITE;
     }
     if(dwAccess & XFILE_WRITE)
     {
         dwFileAccess |= GENERIC_WRITE;
         if(dwAccess & XFILE_SHARED)
-            dwShareAccess |= FILE_SHARE_WRITE;
+            dwShareAccess |= FILE_SHARE_READ;
     }
 
     assert(lpFile);
@@ -249,12 +249,14 @@ String GetPathFileName(CTSTR lpPath, BOOL bExtension)
     }
 
     String newPath = lpPath;
-
-    if(!bExtension)
+    if(newPath.IsValid())
     {
-        TSTR pDot = srchr(newPath, '.');
-        if(pDot)
-            newPath.SetLength((int)((((UPARAM)pDot)-((UPARAM)newPath.Array()))/sizeof(TCHAR)));
+        if(!bExtension)
+        {
+            TSTR pDot = srchr(newPath, '.');
+            if(pDot)
+                newPath.SetLength((int)((((UPARAM)pDot)-((UPARAM)newPath.Array()))/sizeof(TCHAR)));
+        }
     }
 
     return newPath;
@@ -331,6 +333,31 @@ String GetPathExtension(CTSTR lpPath)
         return String(lpExtensionStart+1);
     else
         return String();
+}
+
+BOOL IsSafeFilename(CTSTR path)
+{
+    const TCHAR *p;
+
+    p = path;
+
+    if (!*p)
+        return FALSE;
+
+    if (sstr(path, TEXT("..")))
+        return FALSE;
+
+    if (*p == '/')
+        return FALSE;
+
+    while (*p)
+    {
+        if (!isalnum(*p) && *p != '.' && *p != '/' && *p != '_')
+            return FALSE;
+        p++;
+    }
+
+    return TRUE;
 }
 
 #endif
