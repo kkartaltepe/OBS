@@ -74,6 +74,32 @@ void OBS::RegisterImageSourceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCR
     classInfo->configProc = configProc;
 }
 
+void OBS::RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc){
+	if(!lpClassName || !*lpClassName)
+    {
+        AppWarning(TEXT("OBS::RegisterServiceClass: No class name specified"));
+        return;
+    }
+
+    if(!createProc)
+    {
+        AppWarning(TEXT("OBS::RegisterServiceClass: No create procedure specified"));
+        return;
+    }
+
+    if(GetServiceClass(lpClassName))
+    {
+        AppWarning(TEXT("OBS::RegisterServiceClass: Tried to register '%s', but it already exists"), lpClassName);
+        return;
+    }
+
+    ClassInfo *classInfo  = serviceClasses.CreateNew();
+    classInfo->strClass   = lpClassName;
+    classInfo->strName    = lpDisplayName;
+    classInfo->createProc = createProc;
+    classInfo->configProc = configProc;
+}
+
 Scene* OBS::CreateScene(CTSTR lpClassName, XElement *data)
 {
     for(UINT i=0; i<sceneClasses.Num(); i++)

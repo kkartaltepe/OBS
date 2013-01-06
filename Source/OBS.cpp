@@ -393,6 +393,11 @@ public:
         App->RegisterImageSourceClass(lpClassName, lpDisplayName, createProc, configProc);
     }
 
+	virtual void RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc)
+	{
+		App->RegisterServiceClass(lpClassName, lpDisplayName, createProc, configProc);
+	}
+
     virtual ImageSource* CreateImageSource(CTSTR lpClassName, XElement *data)
     {
         return App->CreateImageSource(lpClassName, data);
@@ -1011,6 +1016,8 @@ OBS::~OBS()
         sceneClasses[i].FreeData();
     for(UINT i=0; i<imageSourceClasses.Num(); i++)
         imageSourceClasses[i].FreeData();
+	for(UINT i=0; i<serviceClasses.Num(); i++)
+        serviceClasses[i].FreeData();
 
     if(hSceneMutex)
         OSCloseMutex(hSceneMutex);

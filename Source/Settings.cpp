@@ -598,6 +598,10 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                         }
                     }
                 }
+				numServices = App->serviceClasses.Num(); //adding in plugin services
+				for(UINT i=0; i<numServices; i++){
+					SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)App->serviceClasses.GetElement(i).strName.CreateUTF8String);
+				}
 
                 int serviceID = LoadSettingComboInt(hwndTemp, TEXT("Publish"), TEXT("Service"), 1, 0);
                 if(mode != 0) ShowWindow(hwndTemp, SW_HIDE);

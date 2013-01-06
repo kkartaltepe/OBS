@@ -222,6 +222,7 @@
     <ClInclude Include="GraphicsSystem.h" />
     <ClInclude Include="HotkeyControlEx.h" />
     <ClInclude Include="OBSApi.h" />
+    <ClInclude Include="RTMPService.h" />
     <ClInclude Include="Scene.h" />
     <ClInclude Include="Utility\Alloc.h" />
     <ClInclude Include="Utility\ConfigFile.h" />

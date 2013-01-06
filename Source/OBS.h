@@ -560,6 +560,7 @@ class OBS
 
     List<ClassInfo> sceneClasses;
     List<ClassInfo> imageSourceClasses;
+	List<ClassInfo> serviceClasses;
 
     List<GlobalSourceInfo> globalSources;
 
@@ -610,6 +611,17 @@ class OBS
         {
             if(imageSourceClasses[i].strClass.CompareI(lpClass))
                 return imageSourceClasses+i;
+        }
+
+        return NULL;
+    }
+
+	inline ClassInfo* GetServiceClass(CTSTR lpClass) const
+    {
+        for(UINT i=0; i<serviceClasses.Num(); i++)
+        {
+            if(serviceClasses[i].strClass.CompareI(lpClass))
+                return serviceClasses+i;
         }
 
         return NULL;
@@ -765,6 +777,7 @@ public:
 
     virtual void RegisterSceneClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc);
     virtual void RegisterImageSourceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc);
+	virtual void RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc);
 
     virtual ImageSource* CreateImageSource(CTSTR lpClassName, XElement *data);
 
