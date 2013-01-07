@@ -74,7 +74,7 @@ void OBS::RegisterImageSourceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCR
     classInfo->configProc = configProc;
 }
 
-void OBS::RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc){
+void OBS::RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSSETTINGPROC settingsProc){
 	if(!lpClassName || !*lpClassName)
     {
         AppWarning(TEXT("OBS::RegisterServiceClass: No class name specified"));
@@ -93,11 +93,11 @@ void OBS::RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATE
         return;
     }
 
-    ClassInfo *classInfo  = serviceClasses.CreateNew();
-    classInfo->strClass   = lpClassName;
-    classInfo->strName    = lpDisplayName;
-    classInfo->createProc = createProc;
-    classInfo->configProc = configProc;
+    ServiceInfo *serviceInfo  = serviceClasses.CreateNew();
+    serviceInfo->strClass   = lpClassName;
+    serviceInfo->strName    = lpDisplayName;
+    serviceInfo->createProc = createProc;
+    serviceInfo->settingsProc = settingsProc;
 }
 
 Scene* OBS::CreateScene(CTSTR lpClassName, XElement *data)

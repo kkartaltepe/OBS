@@ -393,9 +393,9 @@ public:
         App->RegisterImageSourceClass(lpClassName, lpDisplayName, createProc, configProc);
     }
 
-	virtual void RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc)
+	virtual void RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSSETTINGPROC settingProc)
 	{
-		App->RegisterServiceClass(lpClassName, lpDisplayName, createProc, configProc);
+		App->RegisterServiceClass(lpClassName, lpDisplayName, createProc, settingProc);
 	}
 
     virtual ImageSource* CreateImageSource(CTSTR lpClassName, XElement *data)

@@ -1,0 +1,4 @@
+ClassName	"Livestream.com"
+
+Plugin.Description  "This plugin adds in easy to use Livestream.com functionality for OBS"
+Plugin.Name         "Livestream.com Plugin"

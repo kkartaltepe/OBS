@@ -9,11 +9,19 @@ extern "C" __declspec(dllexport) CTSTR GetPluginDescription();
 LocaleStringLookup *pluginLocale = NULL;
 HINSTANCE hinstMain = NULL;
 
-#define LIVESTREAM_CLASSNAME TEXT("Livestream.com")
+#define LIVESTREAM_CLASSNAME TEXT("LivestreamPlugin")
 
 RTMPService* STDCALL CreateLivestreamService(XElement* data){
 	LivestreamService* livestreamService = new LivestreamService();
+	return livestreamService;
+}
 
+bool STDCALL SettingsProc(HWND hwnd, UINT mode) //Codes 0 = init, 1 = select, 2 = save
+{
+	String s = "Called with mode: ";
+	s+= mode;
+	MessageBox(hwnd, s.Array(), NULL, MB_ICONEXCLAMATION | MB_YESNO);
+	return FALSE;
 }
 
 bool LoadPlugin(){
@@ -32,7 +40,7 @@ bool LoadPlugin(){
             AppWarning(TEXT("Could not open locale string file '%s'"), pluginStringFile.Array());
     }
 
-    API->RegisterImageSourceClass(LIVESTREAM_CLASSNAME, PluginStr("ClassName"), (OBSCREATEPROC)CreateLivestreamService, (OBSCONFIGPROC)ConfigureLivestreamService);
+    API->RegisterServiceClass(LIVESTREAM_CLASSNAME, PluginStr("ClassName"), (OBSCREATEPROC)CreateLivestreamService, (OBSSETTINGPROC)SettingsProc);
 
     return true;
 }

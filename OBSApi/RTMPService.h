@@ -10,6 +10,6 @@ public:
 	virtual void onSelected(){};
 	virtual void onDeselected(){};
 
-	virtual String getRTMPURL();
-	virtual String getPlayPath();
+	virtual String getRTMPURL(){return (LPSTR)NULL;};
+	virtual String getPlayPath(){return (LPSTR)NULL;};
 };

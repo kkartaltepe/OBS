@@ -581,7 +581,7 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                 hwndTemp = GetDlgItem(hwnd, IDC_SERVICE);
                 SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("Custom"));
 
-                UINT numServices = 0;
+                UINT numServices = 0, numPluginServices = 0;
 
                 XConfig serverData;
                 if(serverData.Open(TEXT("services.xconfig")))
@@ -598,9 +598,9 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                         }
                     }
                 }
-				numServices = App->serviceClasses.Num(); //adding in plugin services
-				for(UINT i=0; i<numServices; i++){
-					SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)App->serviceClasses.GetElement(i).strName.CreateUTF8String);
+				numPluginServices = App->serviceClasses.Num(); //adding in plugin services
+				for(UINT i=0; i<numPluginServices; i++){
+					SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)App->serviceClasses.GetElement(i).strName.Array());
 				}
 
                 int serviceID = LoadSettingComboInt(hwndTemp, TEXT("Publish"), TEXT("Service"), 1, 0);
@@ -624,25 +624,32 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                     hwndTemp = GetDlgItem(hwnd, IDC_SERVERLIST);
 
                     XElement *services = serverData.GetElement(TEXT("services"));
-                    if(services)
-                    {
-                        XElement *service = services->GetElementByID(serviceID-1);
-                        if(service)
-                        {
-                            XElement *servers = service->GetElement(TEXT("servers"));
-                            if(servers)
-                            {
-                                UINT numServers = servers->NumDataItems();
-                                for(UINT i=0; i<numServers; i++)
-                                {
-                                    XDataItem *server = servers->GetDataItemByID(i);
-                                    SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)server->GetName());
-                                }
-                            }
-                        }
-                    }
+					if(numServices < serviceID ) //Its a plugin service
+					{ 
+						App->serviceClasses.GetElement(serviceID-numServices-1).settingsProc(hwnd, 0); //initilized
+					} 
+					else 
+					{
+						if(services)
+						{
+							XElement *service = services->GetElementByID(serviceID-1);
+							if(service)
+							{
+								XElement *servers = service->GetElement(TEXT("servers"));
+								if(servers)
+								{
+									UINT numServers = servers->NumDataItems();
+									for(UINT i=0; i<numServers; i++)
+									{
+										XDataItem *server = servers->GetDataItemByID(i);
+										SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)server->GetName());
+									}
+								}
+							}
+						}
 
-                    LoadSettingComboString(hwndTemp, TEXT("Publish"), TEXT("URL"), NULL);
+						LoadSettingComboString(hwndTemp, TEXT("Publish"), TEXT("URL"), NULL);
+					}
                 }
 
                 if(mode != 0) ShowWindow(hwndTemp, SW_HIDE);
@@ -855,6 +862,7 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                             }
                             else
                             {
+								UINT numServices = 0;
                                 ShowWindow(GetDlgItem(hwnd, IDC_URL), SW_HIDE);
 
                                 hwndTemp = GetDlgItem(hwnd, IDC_SERVERLIST);
@@ -865,6 +873,7 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                                 if(serverData.Open(TEXT("services.xconfig")))
                                 {
                                     XElement *services = serverData.GetElement(TEXT("services"));
+									numServices = services->NumElements();
                                     if(services)
                                     {
                                         XElement *service = services->GetElementByID(serviceID-1);
@@ -883,6 +892,9 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                                         }
                                     }
                                 }
+								if(serviceID > numServices) { //Its a plugin
+									App->serviceClasses.GetElement(serviceID - numServices-1).settingsProc(hwnd, 1); //on select
+								}
 
                                 SendMessage(hwndTemp, CB_SETCURSEL, 0, 0);
                             }
@@ -1870,8 +1882,15 @@ void OBS::ApplySettings()
                 }
                 else
                 {
-                    strTemp = GetCBText(GetDlgItem(hwndCurrentSettings, IDC_SERVERLIST));
-                    AppConfig->SetString(TEXT("Publish"), TEXT("URL"), strTemp);
+					TCHAR serviceName[45];
+					ServiceInfo* service;
+					SendMessage(GetDlgItem(hwndCurrentSettings, IDC_SERVICE), CB_GETLBTEXT, serviceID, (LPARAM)serviceName);
+					if(serviceName && (service=App->GetServiceClass(serviceName))){ //We have a plugin service
+						service->settingsProc(hwndCurrentSettings, 3);
+					}else {
+						strTemp = GetCBText(GetDlgItem(hwndCurrentSettings, IDC_SERVERLIST));
+						AppConfig->SetString(TEXT("Publish"), TEXT("URL"), strTemp);
+					}
                 }
 
                 //------------------------------------------

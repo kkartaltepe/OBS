@@ -21,6 +21,7 @@
 
 
 typedef LPVOID (STDCALL* OBSCREATEPROC)(XElement*); //data
+typedef LPVOID (STDCALL* OBSSETTINGPROC)(HWND, UINT); //hwnd, mode
 typedef bool (STDCALL* OBSCONFIGPROC)(XElement*, bool); //element, bInitializing
 
 typedef void (STDCALL* OBSHOTKEYPROC)(DWORD, UPARAM, bool);
@@ -57,7 +58,7 @@ public:
 
     virtual void RegisterSceneClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc)=0;
     virtual void RegisterImageSourceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc)=0;
-	virtual void RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc)=0;
+	virtual void RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSSETTINGPROC settingProc)=0;
 
     virtual ImageSource* CreateImageSource(CTSTR lpClassName, XElement *data)=0;
 

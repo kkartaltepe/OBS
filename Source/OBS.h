@@ -242,6 +242,18 @@ struct ClassInfo
 
 //----------------------------
 
+struct ServiceInfo
+{
+	String strClass;
+	String strName;
+	OBSCREATEPROC createProc;
+	OBSSETTINGPROC settingsProc;
+
+	inline void FreeData() {strClass.Clear(); strName.Clear();}
+};
+
+//----------------------------
+
 struct PluginInfo
 {
     String strFile;
@@ -560,7 +572,7 @@ class OBS
 
     List<ClassInfo> sceneClasses;
     List<ClassInfo> imageSourceClasses;
-	List<ClassInfo> serviceClasses;
+	List<ServiceInfo> serviceClasses;
 
     List<GlobalSourceInfo> globalSources;
 
@@ -616,11 +628,12 @@ class OBS
         return NULL;
     }
 
-	inline ClassInfo* GetServiceClass(CTSTR lpClass) const
+	//todo: rename
+	inline ServiceInfo* GetServiceClass(CTSTR lpClass) const
     {
         for(UINT i=0; i<serviceClasses.Num(); i++)
         {
-            if(serviceClasses[i].strClass.CompareI(lpClass))
+            if(serviceClasses[i].strName.CompareI(lpClass))
                 return serviceClasses+i;
         }
 
@@ -777,7 +790,7 @@ public:
 
     virtual void RegisterSceneClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc);
     virtual void RegisterImageSourceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc);
-	virtual void RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc);
+	virtual void RegisterServiceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSSETTINGPROC settingProc);
 
     virtual ImageSource* CreateImageSource(CTSTR lpClassName, XElement *data);
 
