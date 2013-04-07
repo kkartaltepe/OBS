@@ -198,9 +198,9 @@ STDMETHODIMP CapturePin::Receive(IMediaSample *pSample)
     if(pSample)
     {
         if(expectedMajorType == MEDIATYPE_Video)
-            source->ReceiveVideo(pSample);
+            source->ReceiveMediaSample(pSample, false);
         else if(expectedMajorType == MEDIATYPE_Audio)
-            source->ReceiveAudio(pSample);
+            source->ReceiveMediaSample(pSample, true);
     }
     return S_OK;
 }
@@ -213,7 +213,7 @@ STDMETHODIMP CapturePin::ReceiveMultiple(IMediaSample **pSamples, long nSamples,
     return S_OK;
 }
 
-STDMETHODIMP CapturePin::ReceiveCanBlock() {return S_FALSE;}
+STDMETHODIMP CapturePin::ReceiveCanBlock() {return S_OK;}
 
 bool CapturePin::IsValidMediaType(const AM_MEDIA_TYPE *pmt) const
 {

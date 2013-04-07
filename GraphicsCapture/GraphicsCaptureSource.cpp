@@ -20,6 +20,13 @@
 #include "GraphicsCapture.h"
 
 
+typedef HANDLE (WINAPI *CRTPROC)(HANDLE, LPSECURITY_ATTRIBUTES, SIZE_T, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
+typedef BOOL   (WINAPI *WPMPROC)(HANDLE, LPVOID, LPCVOID, SIZE_T, SIZE_T*);
+typedef LPVOID (WINAPI *VAEPROC)(HANDLE, LPVOID, SIZE_T, DWORD, DWORD);
+typedef BOOL   (WINAPI *VFEPROC)(HANDLE, LPVOID, SIZE_T, DWORD);
+typedef HANDLE (WINAPI *OPPROC) (DWORD, BOOL, DWORD);
+
+
 BOOL WINAPI InjectLibrary(HANDLE hProcess, CTSTR lpDLL)
 {
     UPARAM procAddress;
@@ -33,20 +40,55 @@ BOOL WINAPI InjectLibrary(HANDLE hProcess, CTSTR lpDLL)
 
     dwSize = ssize((TCHAR*)lpDLL);
 
-    lpStr = (LPVOID)VirtualAllocEx(hProcess, NULL, dwSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if(!lpStr) goto end;
+    //--------------------------------------------------------
 
-    bWorks = WriteProcessMemory(hProcess, lpStr, (LPVOID)lpDLL, dwSize, &writtenSize);
-    if(!bWorks) goto end;
+    int obfSize = 12;
+
+    char pWPMStr[19], pCRTStr[19], pVAEStr[15], pVFEStr[14], pLLStr[13];
+    mcpy(pWPMStr, "RvnrdPqmni|}Dmfegm", 19); //WriteProcessMemory with each character obfuscated
+    mcpy(pCRTStr, "FvbgueQg`c{k]`yotp", 19); //CreateRemoteThread with each character obfuscated
+    mcpy(pVAEStr, "WiqvpekGeddiHt", 15);     //VirtualAllocEx with each character obfuscated
+    mcpy(pVFEStr, "Wiqvpek@{mnOu", 14);      //VirtualFreeEx with each character obfuscated
+    mcpy(pLLStr,  "MobfImethzr", 12);        //LoadLibrary with each character obfuscated
 
 #ifdef UNICODE
-    procAddress = (UPARAM)GetProcAddress(GetModuleHandle(TEXT("KERNEL32")), "LoadLibraryW");
+    pLLStr[11] = 'W';
 #else
-    procAddress = (UPARAM)GetProcAddress(GetModuleHandle(TEXT("KERNEL32")), "LoadLibraryA");
+    pLLStr[11] = 'A';
 #endif
+    pLLStr[12] = 0;
+
+    obfSize += 6;
+    for (int i=0; i<obfSize; i++) pWPMStr[i] ^= i^5;
+    for (int i=0; i<obfSize; i++) pCRTStr[i] ^= i^5;
+
+    obfSize -= 4;
+    for (int i=0; i<obfSize; i++) pVAEStr[i] ^= i^1;
+
+    obfSize -= 1;
+    for (int i=0; i<obfSize; i++) pVFEStr[i] ^= i^1;
+
+    obfSize -= 2;
+    for (int i=0; i<obfSize; i++) pLLStr[i]  ^= i^1;
+
+    HMODULE hK32 = GetModuleHandle(TEXT("KERNEL32"));
+    WPMPROC pWriteProcessMemory = (WPMPROC)GetProcAddress(hK32, pWPMStr);
+    CRTPROC pCreateRemoteThread = (CRTPROC)GetProcAddress(hK32, pCRTStr);
+    VAEPROC pVirtualAllocEx     = (VAEPROC)GetProcAddress(hK32, pVAEStr);
+    VFEPROC pVirtualFreeEx      = (VFEPROC)GetProcAddress(hK32, pVFEStr);
+
+    //--------------------------------------------------------
+
+    lpStr = (LPVOID)(*pVirtualAllocEx)(hProcess, NULL, dwSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if(!lpStr) goto end;
+
+    bWorks = (*pWriteProcessMemory)(hProcess, lpStr, (LPVOID)lpDLL, dwSize, &writtenSize);
+    if(!bWorks) goto end;
+
+    procAddress = (UPARAM)GetProcAddress(hK32, pLLStr);
     if(!procAddress) goto end;
 
-    hThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)procAddress, lpStr, 0, &dwTemp);
+    hThread = (*pCreateRemoteThread)(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)procAddress, lpStr, 0, &dwTemp);
     if(!hThread) goto end;
 
     if(WaitForSingleObject(hThread, 200) == WAIT_OBJECT_0)
@@ -66,7 +108,7 @@ end:
     if(hThread)
         CloseHandle(hThread);
     if(lpStr)
-        VirtualFreeEx(hProcess, lpStr, 0, MEM_RELEASE);
+        (*pVirtualFreeEx)(hProcess, lpStr, 0, MEM_RELEASE);
 
     if(!bRet)
         SetLastError(lastError);
@@ -94,7 +136,7 @@ GraphicsCaptureSource::~GraphicsCaptureSource()
     EndScene(); //should never actually need to be called, but doing it anyway just to be safe
 }
 
-bool GetCaptureInfo(CaptureInfo &ci, DWORD processID)
+static bool GetCaptureInfo(CaptureInfo &ci, DWORD processID)
 {
     HANDLE hFileMap = OpenFileMapping(FILE_MAP_ALL_ACCESS, FALSE, String() << INFO_MEMORY << int(processID));
     if(hFileMap == NULL)
@@ -168,7 +210,7 @@ void GraphicsCaptureSource::NewCapture()
 
     bFlip = info.bFlip != 0;
 
-    hwndCapture = info.hwndCapture;
+    hwndCapture = (HWND)info.hwndCapture;
 
     if(info.captureType == CAPTURETYPE_MEMORY)
         capture = new MemoryCapture;
@@ -199,6 +241,8 @@ void GraphicsCaptureSource::EndCapture()
         capture = NULL;
     }
 
+    if(hOBSIsAlive)
+        CloseHandle(hOBSIsAlive);
     if(hSignalRestart)
         CloseHandle(hSignalRestart);
     if(hSignalEnd)
@@ -208,7 +252,7 @@ void GraphicsCaptureSource::EndCapture()
     if(hSignalExit)
         CloseHandle(hSignalExit);
 
-    hSignalRestart = hSignalEnd = hSignalReady = hSignalExit = NULL;
+    hSignalRestart = hSignalEnd = hSignalReady = hSignalExit = hOBSIsAlive = NULL;
 
     bErrorAcquiring = false;
 
@@ -227,9 +271,7 @@ void GraphicsCaptureSource::EndCapture()
 void GraphicsCaptureSource::Preprocess()
 {
     if(hSignalExit && WaitForSingleObject(hSignalExit, 0) == WAIT_OBJECT_0)
-    {
         EndCapture();
-    }
 
     if(bCapturing && !hSignalReady && targetProcessID)
         hSignalReady = GetEvent(String() << CAPTURE_READY_EVENT << int(targetProcessID));
@@ -251,16 +293,33 @@ void GraphicsCaptureSource::BeginScene()
     bIgnoreAspect = data->GetInt(TEXT("ignoreAspect")) != 0;
     bCaptureMouse = data->GetInt(TEXT("captureMouse"), 1) != 0;
 
+    bUseHotkey = data->GetInt(TEXT("useHotkey"), 0) != 0;
+    hotkey = data->GetInt(TEXT("hotkey"), VK_F12);
+
+    if (bUseHotkey)
+        hotkeyID = OBSCreateHotkey(hotkey, (OBSHOTKEYPROC)GraphicsCaptureSource::CaptureHotkey, (UPARAM)this);
+
+    gamma = data->GetInt(TEXT("gamma"), 100);
+
     if(bCaptureMouse && data->GetInt(TEXT("invertMouse")))
         invertShader = CreatePixelShaderFromFile(TEXT("shaders\\InvertTexture.pShader"));
+
+    drawShader = CreatePixelShaderFromFile(TEXT("shaders\\DrawTexture_ColorAdjust.pShader"));
 
     AttemptCapture();
 }
 
 void GraphicsCaptureSource::AttemptCapture()
 {
-    hwndTarget = FindWindow(strWindowClass, NULL);
-    if(hwndTarget)
+    if (!bUseHotkey)
+        hwndTarget = FindWindow(strWindowClass, NULL);
+    else
+    {
+        hwndTarget = hwndNextTarget;
+        hwndNextTarget = NULL;
+    }
+
+    if (hwndTarget)
     {
         GetWindowThreadProcessId(hwndTarget, &targetProcessID);
         if(!targetProcessID)
@@ -272,7 +331,7 @@ void GraphicsCaptureSource::AttemptCapture()
     }
     else
     {
-        if(!warningID)
+        if (!bUseHotkey && !warningID)
             warningID = API->AddStreamInfo(Str("Sources.SoftwareCaptureSource.WindowNotFound"), StreamInfoPriority_High);
 
         bCapturing = false;
@@ -289,9 +348,22 @@ void GraphicsCaptureSource::AttemptCapture()
     //-------------------------------------------
     // see if we already hooked the process.  if not, inject DLL
 
-    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, targetProcessID);
+    char pOPStr[12];
+    mcpy(pOPStr, "NpflUvhel{x", 12); //OpenProcess obfuscated
+    for (int i=0; i<11; i++) pOPStr[i] ^= i^1;
+
+    OPPROC pOpenProcess = (OPPROC)GetProcAddress(GetModuleHandle(TEXT("KERNEL32")), pOPStr);
+
+    HANDLE hProcess = (*pOpenProcess)(PROCESS_ALL_ACCESS, FALSE, targetProcessID);
     if(hProcess)
     {
+        //-------------------------------------------
+        // load keepalive event
+
+        hOBSIsAlive = CreateEvent(NULL, FALSE, FALSE, String() << OBS_KEEPALIVE_EVENT << int(targetProcessID));
+
+        //-------------------------------------------
+
         hwndCapture = hwndTarget;
 
         hSignalRestart = OpenEvent(EVENT_ALL_ACCESS, FALSE, String() << RESTART_CAPTURE_EVENT << int(targetProcessID));
@@ -303,26 +375,112 @@ void GraphicsCaptureSource::AttemptCapture()
         }
         else
         {
-            String strDLL;
-            DWORD dwDirSize = GetCurrentDirectory(0, NULL);
-            strDLL.SetLength(dwDirSize);
-            GetCurrentDirectory(dwDirSize, strDLL);
+            BOOL bSameBit = TRUE;
 
-            strDLL << TEXT("\\plugins\\GraphicsCapture\\GraphicsCaptureHook.dll");
-
-            if(InjectLibrary(hProcess, strDLL))
+            if(Is64BitWindows())
             {
-                captureWaitCount = 0;
-                bCapturing = true;
+                BOOL bCurrentProcessWow64, bTargetProcessWow64;
+                IsWow64Process(GetCurrentProcess(), &bCurrentProcessWow64);
+                IsWow64Process(hProcess, &bTargetProcessWow64);
+
+                bSameBit = (bCurrentProcessWow64 == bTargetProcessWow64);
+            }
+
+            if(bSameBit)
+            {
+                String strDLL;
+                DWORD dwDirSize = GetCurrentDirectory(0, NULL);
+                strDLL.SetLength(dwDirSize);
+                GetCurrentDirectory(dwDirSize, strDLL);
+
+                strDLL << TEXT("\\plugins\\GraphicsCapture\\GraphicsCaptureHook");
+
+                BOOL b32bit = TRUE;
+                if(Is64BitWindows())
+                    IsWow64Process(hProcess, &b32bit);
+
+                if(!b32bit)
+                    strDLL << TEXT("64");
+
+                strDLL << TEXT(".dll");
+
+                if(InjectLibrary(hProcess, strDLL))
+                {
+                    captureWaitCount = 0;
+                    bCapturing = true;
+                }
+                else
+                {
+                    AppWarning(TEXT("GraphicsCaptureSource::BeginScene: Failed to inject library, GetLastError = %u"), GetLastError());
+
+                    CloseHandle(hProcess);
+                    hProcess = NULL;
+                    bErrorAcquiring = true;
+                }
             }
             else
             {
-                AppWarning(TEXT("GraphicsCaptureSource::BeginScene: Failed to inject library, GetLastError = %u"), GetLastError());
+                String strDLLPath;
+                DWORD dwDirSize = GetCurrentDirectory(0, NULL);
+                strDLLPath.SetLength(dwDirSize);
+                GetCurrentDirectory(dwDirSize, strDLLPath);
 
-                CloseHandle(hProcess);
-                hProcess = NULL;
-                bErrorAcquiring = true;
+                strDLLPath << TEXT("\\plugins\\GraphicsCapture");
+
+                BOOL b32bit = TRUE;
+                if(Is64BitWindows())
+                    IsWow64Process(hProcess, &b32bit);
+
+                String strHelper = strDLLPath;
+                strHelper << ((b32bit) ? TEXT("\\injectHelper.exe") : TEXT("\\injectHelper64.exe"));
+
+                String strCommandLine;
+                strCommandLine << TEXT("\"") << strHelper << TEXT("\" ") << UIntString(targetProcessID);
+
+                //---------------------------------------
+
+                PROCESS_INFORMATION pi;
+                STARTUPINFO si;
+
+                zero(&pi, sizeof(pi));
+                zero(&si, sizeof(si));
+                si.cb = sizeof(si);
+
+                if(CreateProcess(strHelper, strCommandLine, NULL, NULL, FALSE, 0, NULL, strDLLPath, &si, &pi))
+                {
+                    int exitCode = 0;
+
+                    WaitForSingleObject(pi.hProcess, INFINITE);
+                    GetExitCodeProcess(pi.hProcess, (DWORD*)&exitCode);
+                    CloseHandle(pi.hThread);
+                    CloseHandle(pi.hProcess);
+
+                    if(exitCode == 0)
+                    {
+                        captureWaitCount = 0;
+                        bCapturing = true;
+                    }
+                    else
+                    {
+                        AppWarning(TEXT("GraphicsCaptureSource::BeginScene: Failed to inject library, error code = %d"), exitCode);
+                        bErrorAcquiring = true;
+                    }
+                }
+                else
+                {
+                    AppWarning(TEXT("GraphicsCaptureSource::BeginScene: Could not create inject helper, GetLastError = %u"), GetLastError());
+                    bErrorAcquiring = true;
+                }
             }
+        }
+
+        CloseHandle(hProcess);
+        hProcess = NULL;
+
+        if (!bCapturing)
+        {
+            CloseHandle(hOBSIsAlive);
+            hOBSIsAlive = NULL;
         }
     }
     else
@@ -330,8 +488,6 @@ void GraphicsCaptureSource::AttemptCapture()
         AppWarning(TEXT("GraphicsCaptureSource::BeginScene: OpenProcess failed, GetLastError = %u"), GetLastError());
         bErrorAcquiring = true;
     }
-
-    CloseHandle(hProcess);
 }
 
 void GraphicsCaptureSource::EndScene()
@@ -349,16 +505,26 @@ void GraphicsCaptureSource::EndScene()
         invertShader = NULL;
     }
 
+    if(drawShader)
+    {
+        delete drawShader;
+        drawShader = NULL;
+    }
+
     if(cursorTexture)
     {
         delete cursorTexture;
         cursorTexture = NULL;
     }
 
-    if(!bCapturing)
+    if (hotkeyID)
     {
-        return;
+        OBSDeleteHotkey(hotkeyID);
+        hotkeyID = 0;
     }
+
+    if(!bCapturing)
+        return;
 
     bCapturing = false;
 
@@ -379,7 +545,8 @@ void GraphicsCaptureSource::Tick(float fSeconds)
     if(!bCapturing && !bErrorAcquiring)
     {
         captureCheckInterval += fSeconds;
-        if(captureCheckInterval >= 3.0f)
+        if ((!bUseHotkey && captureCheckInterval >= 3.0f) ||
+            (bUseHotkey && hwndNextTarget != NULL))
         {
             AttemptCapture();
             captureCheckInterval = 0.0f;
@@ -387,8 +554,10 @@ void GraphicsCaptureSource::Tick(float fSeconds)
     }
     else
     {
-        if(!IsWindow(hwndCapture))
+        if(!IsWindow(hwndCapture) || (bUseHotkey && hwndNextTarget && hwndNextTarget != hwndTarget))
             EndCapture();
+        else
+            hwndNextTarget = NULL;
     }
 }
 
@@ -413,6 +582,15 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
 {
     if(capture)
     {
+        Shader *lastShader = GetCurrentPixelShader();
+
+        float fGamma = float(-(gamma-100) + 100) * 0.01f;
+
+        LoadPixelShader(drawShader);
+        HANDLE hGamma = drawShader->GetParameterByName(TEXT("gamma"));
+        if(hGamma)
+            drawShader->SetFloat(hGamma, fGamma);
+
         //----------------------------------------------------------
         // capture mouse
 
@@ -449,11 +627,11 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
                                 xHotspot = int(ii.xHotspot);
                                 yHotspot = int(ii.yHotspot);
 
-                                UINT size;
-                                LPBYTE lpData = GetCursorData(hIcon, ii, size);
+                                UINT width, height;
+                                LPBYTE lpData = GetCursorData(hIcon, ii, width, height);
                                 if(lpData)
                                 {
-                                    cursorTexture = CreateTexture(size, size, GS_BGRA, lpData, FALSE);
+                                    cursorTexture = CreateTexture(width, height, GS_BGRA, lpData, FALSE);
                                     if(cursorTexture)
                                         bMouseCaptured = true;
 
@@ -541,21 +719,19 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
 
                 newCursorSize *= texStretch;
 
-                Shader *lastShader;
                 bool bInvertCursor = false;
                 if(invertShader)
                 {
-                    lastShader = GetCurrentPixelShader();
                     if(bInvertCursor = ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0 || (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0))
                         LoadPixelShader(invertShader);
                 }
 
-                DrawSprite(cursorTexture, 0xFFFFFFFF, newCursorPos.x, newCursorPos.y+newCursorSize.y, newCursorPos.x+newCursorSize.x, newCursorPos.y);
-
-                if(bInvertCursor)
-                    LoadPixelShader(lastShader);
+                DrawSprite(cursorTexture, 0xFFFFFFFF, newCursorPos.x, newCursorPos.y, newCursorPos.x+newCursorSize.x, newCursorPos.y+newCursorSize.y);
             }
         }
+
+        if(lastShader)
+            LoadPixelShader(lastShader);
     }
 }
 
@@ -568,4 +744,20 @@ void GraphicsCaptureSource::UpdateSettings()
 {
     EndScene();
     BeginScene();
+}
+
+void GraphicsCaptureSource::SetInt(CTSTR lpName, int iVal)
+{
+    if(scmpi(lpName, TEXT("gamma")) == 0)
+    {
+        gamma = iVal;
+        if(gamma < 50)        gamma = 50;
+        else if(gamma > 175)  gamma = 175;
+    }
+}
+
+void GraphicsCaptureSource::CaptureHotkey(DWORD hotkey, GraphicsCaptureSource *capture, bool bDown)
+{
+    if (bDown)
+        capture->hwndNextTarget = GetForegroundWindow();
 }

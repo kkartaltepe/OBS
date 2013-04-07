@@ -86,7 +86,16 @@ class BASE_EXPORT XElement : public XBaseItem
 protected:
     ~XElement();
 
+    XElement* NewElementCopy(XElement* element, bool bSelfAsRoot);
+
 public:
+
+    inline void ReverseOrder()
+    {
+        UINT count = SubItems.Num()/2;
+        for(UINT i=0; i<count; i++)
+            SubItems.SwapValues(i, SubItems.Num()-1-i);
+    }
 
     CTSTR GetString(CTSTR lpName, TSTR def=NULL) const;
     int   GetInt(CTSTR lpName, int def=0) const;
@@ -161,6 +170,8 @@ public:
     XElement* GetElementByID(DWORD elementID) const;
     XElement* GetElementByItem(CTSTR lpName, CTSTR lpItemName, CTSTR lpItemValue) const;
     XElement* CreateElement(CTSTR lpName);
+    XElement* InsertElement(UINT pos, CTSTR lpName);
+    XElement* CopyElement(XElement* element, CTSTR lpNewName);
     void  GetElementList(CTSTR lpName, List<XElement*> &Elements) const;
     void  RemoveElement(XElement *element);
     void  RemoveElement(CTSTR lpName);
@@ -206,6 +217,7 @@ public:
 
     bool    Open(CTSTR lpFile);
     void    Close(bool bSave=false);
+    void    Save();
 
     inline bool IsOpen() const {return RootElement != NULL;}
 

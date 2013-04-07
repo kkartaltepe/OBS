@@ -32,11 +32,17 @@ extern "C"
 
 void get_x264_log(void *param, int i_level, const char *psz, va_list argptr)
 {
-    String chi(psz);
+    String chi;
+    
+    chi << TEXT("x264: ") << String(psz);
     chi.FindReplace(TEXT("%s"), TEXT("%S"));
 
     OSDebugOutva(chi, argptr);
-    Logva(chi, argptr);
+
+    chi.FindReplace(TEXT("\r"), TEXT(""));
+    chi.FindReplace(TEXT("\n"), TEXT(""));
+
+    Logva(chi.Array(), argptr);
 }
 
 
@@ -47,6 +53,17 @@ struct VideoPacket
 };
 
 const float baseCRF = 22.0f;
+
+bool valid_x264_string(const String &str, const char **x264StringList)
+{
+    do
+    {
+        if(str.CompareI(String(*x264StringList)))
+            return true;
+    } while (*++x264StringList != 0);
+
+    return false;
+}
 
 class X264Encoder : public VideoEncoder
 {
@@ -61,18 +78,22 @@ class X264Encoder : public VideoEncoder
 
     int fps_ms;
 
+    bool bRequestKeyframe;
+
     UINT width, height;
 
-    String curPreset;
+    String curPreset, curTune, curProfile;
 
     bool bFirstFrameProcessed;
 
-    bool bUseCBR, bUseCTSAdjust;
+    bool bUseCBR, bUseCFR, bDupeFrames;
 
     List<VideoPacket> CurrentPackets;
-    List<BYTE> HeaderPacket;
+    List<BYTE> HeaderPacket, SEIData;
 
     INT64 delayOffset;
+
+    int frameShift;
 
     inline void ClearPackets()
     {
@@ -81,17 +102,84 @@ class X264Encoder : public VideoEncoder
         CurrentPackets.Clear();
     }
 
-public:
-    X264Encoder(int fps, int width, int height, int quality, CTSTR preset, bool bUse444, int maxBitRate, int bufferSize)
+    inline void SetBitRateParams(DWORD maxBitrate, DWORD bufferSize)
     {
+        paramData.rc.i_vbv_max_bitrate  = maxBitrate; //vbv-maxrate
+        paramData.rc.i_vbv_buffer_size  = bufferSize; //vbv-bufsize
+
+        if(bUseCBR)
+            paramData.rc.i_bitrate = maxBitrate;
+    }
+
+public:
+    X264Encoder(int fps, int width, int height, int quality, CTSTR preset, bool bUse444, int maxBitrate, int bufferSize, bool bUseCFR, bool bDupeFrames)
+    {
+        curPreset = preset;
+
         fps_ms = 1000/fps;
+
+        StringList paramList;
+
+        BOOL bUseCustomParams = AppConfig->GetInt(TEXT("Video Encoding"), TEXT("UseCustomSettings"));
+        if(bUseCustomParams)
+        {
+            String strCustomParams = AppConfig->GetString(TEXT("Video Encoding"), TEXT("CustomSettings"));
+            strCustomParams.KillSpaces();
+
+            if(strCustomParams.IsValid())
+            {
+                Log(TEXT("Using custom x264 settings: \"%s\""), strCustomParams.Array());
+
+                strCustomParams.GetTokenList(paramList, ' ', FALSE);
+                for(UINT i=0; i<paramList.Num(); i++)
+                {
+                    String &strParam = paramList[i];
+                    if(!schr(strParam, '='))
+                        continue;
+
+                    String strParamName = strParam.GetToken(0, '=');
+                    String strParamVal  = strParam.GetTokenOffset(1, '=');
+
+                    if(strParamName.CompareI(TEXT("preset")))
+                    {
+                        if(valid_x264_string(strParamVal, (const char**)x264_preset_names))
+                            curPreset = strParamVal;
+                        else
+                            Log(TEXT("invalid preset: %s"), strParamVal.Array());
+
+                        paramList.Remove(i--);
+                    }
+                    else if(strParamName.CompareI(TEXT("tune")))
+                    {
+                        if(valid_x264_string(strParamVal, (const char**)x264_tune_names))
+                            curTune = strParamVal;
+                        else
+                            Log(TEXT("invalid tune: %s"), strParamVal.Array());
+
+                        paramList.Remove(i--);
+                    }
+                    else if(strParamName.CompareI(TEXT("profile")))
+                    {
+                        if(valid_x264_string(strParamVal, (const char **)x264_profile_names))
+                            curProfile = strParamVal;
+                        else
+                            Log(TEXT("invalid profile: %s"), strParamVal.Array());
+
+                        paramList.Remove(i--);
+                    }
+                }
+            }
+        }
 
         zero(&paramData, sizeof(paramData));
 
-        curPreset = preset;
         LPSTR lpPreset = curPreset.CreateUTF8String();
-        x264_param_default_preset(&paramData, lpPreset, NULL);
+        LPSTR lpTune = curTune.CreateUTF8String();
 
+        if (x264_param_default_preset(&paramData, lpPreset, lpTune))
+            Log(TEXT("Failed to set x264 defaults: %s/%s"), curPreset.Array(), curTune.Array());
+
+        Free(lpTune);
         Free(lpPreset);
 
         this->width  = width;
@@ -106,81 +194,78 @@ public:
         //paramData.i_threads             = 4;
 
         bUseCBR = AppConfig->GetInt(TEXT("Video Encoding"), TEXT("UseCBR")) != 0;
+        this->bUseCFR = bUseCFR;
+        this->bDupeFrames = bDupeFrames;
+
+        SetBitRateParams(maxBitrate, bufferSize);
 
         if(bUseCBR)
         {
-            paramData.rc.i_bitrate          = maxBitRate;
-            paramData.rc.i_vbv_max_bitrate  = maxBitRate; //vbv-maxrate
-            paramData.rc.i_vbv_buffer_size  = bufferSize; //vbv-bufsize
-            paramData.i_nal_hrd             = X264_NAL_HRD_CBR;
-            paramData.rc.i_rc_method        = X264_RC_ABR;
-            paramData.rc.f_rf_constant      = 0.0f;
+            paramData.i_nal_hrd         = X264_NAL_HRD_CBR;
+            paramData.rc.i_rc_method    = X264_RC_ABR;
+            paramData.rc.f_rf_constant  = 0.0f;
         }
         else
         {
-            paramData.rc.i_vbv_max_bitrate  = maxBitRate; //vbv-maxrate
-            paramData.rc.i_vbv_buffer_size  = bufferSize; //vbv-bufsize
-            paramData.rc.i_rc_method        = X264_RC_CRF;
-            paramData.rc.f_rf_constant      = baseCRF+float(10-quality);
+            paramData.rc.i_rc_method    = X264_RC_CRF;
+            paramData.rc.f_rf_constant  = baseCRF+float(10-quality);
         }
 
-        paramData.b_vfr_input           = 1;
-        paramData.i_keyint_max          = fps*4;      //keyframe every 4 sec, should make this an option
+        paramData.b_vfr_input           = !bUseCFR;
         paramData.i_width               = width;
         paramData.i_height              = height;
         paramData.vui.b_fullrange       = 0;          //specify full range input levels
-        //paramData.i_frame_reference     = 1;
-        //paramData.b_in
+        //paramData.i_keyint_max          = fps*4;      //keyframe every 4 sec, should make this an option
 
-        paramData.i_fps_num = fps;
-        paramData.i_fps_den = 1;
+        paramData.i_fps_num             = fps;
+        paramData.i_fps_den             = 1;
 
-        paramData.i_timebase_num = 1;
-        paramData.i_timebase_den = 1000;
+        paramData.i_timebase_num        = 1;
+        paramData.i_timebase_den        = 1000;
 
-        //paramData.pf_log                = get_x264_log;
-        //paramData.i_log_level           = X264_LOG_INFO;
+        paramData.pf_log                = get_x264_log;
+        paramData.i_log_level           = X264_LOG_WARNING;
 
-        bUseCTSAdjust = !AppConfig->GetInt(TEXT("Video Encoding"), TEXT("DisableCTSAdjust"));
-        BOOL bUseCustomParams = AppConfig->GetInt(TEXT("Video Encoding"), TEXT("UseCustomSettings"));
-        if(bUseCustomParams)
+        for(UINT i=0; i<paramList.Num(); i++)
         {
-            String strCustomParams = AppConfig->GetString(TEXT("Video Encoding"), TEXT("CustomSettings"));
-            strCustomParams.KillSpaces();
+            String &strParam = paramList[i];
+            if(!schr(strParam, '='))
+                continue;
 
-            if(strCustomParams.IsValid())
+            String strParamName = strParam.GetToken(0, '=');
+            String strParamVal  = strParam.GetTokenOffset(1, '=');
+
+            if( strParamName.CompareI(TEXT("fps")) || 
+                strParamName.CompareI(TEXT("force-cfr")))
             {
-                Log(TEXT("Using custom x264 settings: \"%s\""), strCustomParams.Array());
+                Log(TEXT("The custom x264 command '%s' is unsupported, use the application settings instead"), strParam.Array());
+                continue;
+            }
+            else
+            {
+                LPSTR lpParam = strParamName.CreateUTF8String();
+                LPSTR lpVal   = strParamVal.CreateUTF8String();
 
-                StringList paramList;
-                strCustomParams.GetTokenList(paramList, ' ', FALSE);
-                for(UINT i=0; i<paramList.Num(); i++)
-                {
-                    String &strParam = paramList[i];
-                    if(!schr(strParam, '='))
-                        continue;
+                if(x264_param_parse(&paramData, lpParam, lpVal) != 0)
+                    Log(TEXT("The custom x264 command '%s' failed"), strParam.Array());
 
-                    String strParamName = strParam.GetToken(0, '=');
-                    String strParamVal  = strParam.GetTokenOffset(1, '=');
-
-                    if( strParamName.CompareI(TEXT("fps")) /*|| 
-                        strParamName.CompareI(TEXT("force-cfr"))*/)
-                    {
-                        continue;
-                    }
-
-                    LPSTR lpParam = strParamName.CreateUTF8String();
-                    LPSTR lpVal   = strParamVal.CreateUTF8String();
-
-                    x264_param_parse(&paramData, lpParam, lpVal);
-
-                    Free(lpParam);
-                    Free(lpVal);
-                }
+                Free(lpParam);
+                Free(lpVal);
             }
         }
 
         if(bUse444) paramData.i_csp = X264_CSP_I444;
+        else paramData.i_csp = X264_CSP_I420;
+
+        if (curProfile)
+        {
+            LPSTR lpProfile = curProfile.CreateUTF8String();
+
+            if (x264_param_apply_profile (&paramData, lpProfile))
+                Log(TEXT("Failed to set x264 profile: %s"), curProfile.Array());
+
+            Free(lpProfile);
+        }
 
         x264 = x264_encoder_open(&paramData);
         if(!x264)
@@ -210,10 +295,19 @@ public:
         packets.Clear();
         ClearPackets();
 
+        if(bRequestKeyframe)
+            picIn->i_type = X264_TYPE_IDR;
+
         if(x264_encoder_encode(x264, &nalOut, &nalNum, picIn, &picOut) < 0)
         {
             AppWarning(TEXT("x264 encode failed"));
             return false;
+        }
+
+        if(bRequestKeyframe)
+        {
+            picIn->i_type = X264_TYPE_AUTO;
+            bRequestKeyframe = false;
         }
 
         if(!bFirstFrameProcessed && nalNum)
@@ -223,10 +317,23 @@ public:
         }
 
         INT64 ts = INT64(outputTimestamp);
-        int timeOffset = int((picOut.i_pts+delayOffset)-ts);
+        int timeOffset;
 
-        if(bUseCTSAdjust)
+        if(bDupeFrames)
         {
+            //if frame duplication is being used, the shift will be insignificant, so just don't bother adjusting audio
+            timeOffset = int(picOut.i_pts-picOut.i_dts);
+            timeOffset += frameShift;
+
+            if(nalNum && timeOffset < 0)
+            {
+                frameShift -= timeOffset;
+                timeOffset = 0;
+            }
+        }
+        else
+        {
+            timeOffset = int((picOut.i_pts+delayOffset)-ts);
             timeOffset += ctsOffset;
 
             //dynamically adjust the CTS for the stream if it gets lower than the current value
@@ -238,7 +345,7 @@ public:
             }
         }
 
-        //Log(TEXT("dts: %d, pts: %d, timestamp: %d, offset: %d"), picOut.i_dts, picOut.i_pts, outputTimestamp, timeOffset);
+        //Log(TEXT("inpts: %005d, dts: %005d, pts: %005d, timestamp: %005d, offset: %005d, newoffset: %005d"), picIn->i_pts, picOut.i_dts, picOut.i_pts, outputTimestamp, timeOffset, picOut.i_pts-picOut.i_dts);
 
         timeOffset = htonl(timeOffset);
 
@@ -246,33 +353,84 @@ public:
 
         VideoPacket *newPacket = NULL;
 
+        PacketType bestType = PacketType_VideoDisposable;
+        bool bFoundFrame = false;
+
         for(int i=0; i<nalNum; i++)
         {
             x264_nal_t &nal = nalOut[i];
 
-            if(nal.i_type == NAL_SLICE_IDR || nal.i_type == NAL_SLICE || nal.i_type == NAL_SEI)
+            if(nal.i_type == NAL_SEI)
             {
                 BYTE *skip = nal.p_payload;
                 while(*(skip++) != 0x1);
                 int skipBytes = (int)(skip-nal.p_payload);
 
-                bool bNewPacket = (!newPacket);
+                int newPayloadSize = (nal.i_payload-skipBytes);
 
-                if(bNewPacket)
+                if (nal.p_payload[skipBytes+1] == 0x5) {
+                    SEIData.Clear();
+                    BufferOutputSerializer packetOut(SEIData);
+
+                    packetOut.OutputDword(htonl(newPayloadSize));
+                    packetOut.Serialize(nal.p_payload+skipBytes, newPayloadSize);
+                } else {
+                    if (!newPacket)
+                        newPacket = CurrentPackets.CreateNew();
+
+                    BufferOutputSerializer packetOut(newPacket->Packet);
+
+                    packetOut.OutputDword(htonl(newPayloadSize));
+                    packetOut.Serialize(nal.p_payload+skipBytes, newPayloadSize);
+                }
+            }
+            else if(nal.i_type == NAL_FILLER)
+            {
+                BYTE *skip = nal.p_payload;
+                while(*(skip++) != 0x1);
+                int skipBytes = (int)(skip-nal.p_payload);
+
+                int newPayloadSize = (nal.i_payload-skipBytes);
+
+                if (!newPacket)
                     newPacket = CurrentPackets.CreateNew();
+
+                BufferOutputSerializer packetOut(newPacket->Packet);
+
+                packetOut.OutputDword(htonl(newPayloadSize));
+                packetOut.Serialize(nal.p_payload+skipBytes, newPayloadSize);
+            }
+            else if(nal.i_type == NAL_SLICE_IDR || nal.i_type == NAL_SLICE)
+            {
+                BYTE *skip = nal.p_payload;
+                while(*(skip++) != 0x1);
+                int skipBytes = (int)(skip-nal.p_payload);
+
+                if (!newPacket)
+                    newPacket = CurrentPackets.CreateNew();
+
+                if (!bFoundFrame)
+                {
+                    newPacket->Packet.Insert(0, (nal.i_type == NAL_SLICE_IDR) ? 0x17 : 0x27);
+                    newPacket->Packet.Insert(1, 1);
+                    newPacket->Packet.InsertArray(2, timeOffsetAddr, 3);
+
+                    bFoundFrame = true;
+                }
 
                 int newPayloadSize = (nal.i_payload-skipBytes);
                 BufferOutputSerializer packetOut(newPacket->Packet);
 
-                if(bNewPacket)
-                {
-                    packetOut.OutputByte((nal.i_type == NAL_SLICE_IDR || nal.i_type == NAL_SEI) ? 0x17 : 0x27);
-                    packetOut.OutputByte(1);
-                    packetOut.Serialize(timeOffsetAddr, 3);
-                }
-
                 packetOut.OutputDword(htonl(newPayloadSize));
                 packetOut.Serialize(nal.p_payload+skipBytes, newPayloadSize);
+
+                switch(nal.i_ref_idc)
+                {
+                    case NAL_PRIORITY_DISPOSABLE:   bestType = MAX(bestType, PacketType_VideoDisposable);  break;
+                    case NAL_PRIORITY_LOW:          bestType = MAX(bestType, PacketType_VideoLow);         break;
+                    case NAL_PRIORITY_HIGH:         bestType = MAX(bestType, PacketType_VideoHigh);        break;
+                    case NAL_PRIORITY_HIGHEST:      bestType = MAX(bestType, PacketType_VideoHighest);     break;
+                }
             }
             /*else if(nal.i_type == NAL_SPS)
             {
@@ -297,15 +455,9 @@ public:
             }*/
             else
                 continue;
-
-            switch(nal.i_ref_idc)
-            {
-                case NAL_PRIORITY_DISPOSABLE:   packetTypes << PacketType_VideoDisposable;  break;
-                case NAL_PRIORITY_LOW:          packetTypes << PacketType_VideoLow;         break;
-                case NAL_PRIORITY_HIGH:         packetTypes << PacketType_VideoHigh;        break;
-                case NAL_PRIORITY_HIGHEST:      packetTypes << PacketType_VideoHighest;     break;
-            }
         }
+
+        packetTypes << bestType;
 
         packets.SetSize(CurrentPackets.Num());
         for(UINT i=0; i<packets.Num(); i++)
@@ -359,7 +511,19 @@ public:
         packet.size     = HeaderPacket.Num();
     }
 
-    int GetBitRate() const {return paramData.rc.i_vbv_max_bitrate;}
+    virtual void GetSEI(DataPacket &packet)
+    {
+        packet.lpPacket = SEIData.Array();
+        packet.size     = SEIData.Num();
+    }
+
+    int GetBitRate() const
+    {
+        if (paramData.rc.i_vbv_max_bitrate)
+            return paramData.rc.i_vbv_max_bitrate;
+        else
+            return paramData.rc.i_bitrate;
+    }
 
     String GetInfoString() const
     {
@@ -370,6 +534,7 @@ public:
                    TEXT("\r\n    width: ")       << IntString(width) << TEXT(", height: ") << IntString(height) <<
                    TEXT("\r\n    preset: ")      << curPreset <<
                    TEXT("\r\n    CBR: ")         << CTSTR((bUseCBR) ? TEXT("yes") : TEXT("no")) <<
+                   TEXT("\r\n    CFR: ")         << CTSTR((bUseCFR) ? TEXT("yes") : TEXT("no")) <<
                    TEXT("\r\n    max bitrate: ") << IntString(paramData.rc.i_vbv_max_bitrate);
 
         if(!bUseCBR)
@@ -388,17 +553,7 @@ public:
 
     virtual bool SetBitRate(DWORD maxBitrate, DWORD bufferSize)
     {
-        if(bUseCBR)
-        {
-            paramData.rc.i_bitrate          = maxBitrate;
-            paramData.rc.i_vbv_max_bitrate  = maxBitrate; //vbv-maxrate
-            paramData.rc.i_vbv_buffer_size  = bufferSize; //vbv-bufsize
-        }
-        else
-        {
-            paramData.rc.i_vbv_max_bitrate = maxBitrate;
-            paramData.rc.i_vbv_buffer_size = bufferSize;
-        }
+        SetBitRateParams(maxBitrate, bufferSize);
 
         int retVal = x264_encoder_reconfig(x264, &paramData);
         if(retVal < 0)
@@ -406,11 +561,16 @@ public:
 
         return retVal == 0;
     }
+
+    virtual void RequestKeyframe()
+    {
+        bRequestKeyframe = true;
+    }
 };
 
 
-VideoEncoder* CreateX264Encoder(int fps, int width, int height, int quality, CTSTR preset, bool bUse444, int maxBitRate, int bufferSize)
+VideoEncoder* CreateX264Encoder(int fps, int width, int height, int quality, CTSTR preset, bool bUse444, int maxBitRate, int bufferSize, bool bUseCFR, bool bDupeFrames)
 {
-    return new X264Encoder(fps, width, height, quality, preset, bUse444, maxBitRate, bufferSize);
+    return new X264Encoder(fps, width, height, quality, preset, bUse444, maxBitRate, bufferSize, bUseCFR, bDupeFrames);
 }
 

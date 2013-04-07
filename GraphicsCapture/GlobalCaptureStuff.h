@@ -36,6 +36,8 @@
 #define INFO_MEMORY             TEXT("Local\\OBSInfoMemory")
 #define TEXTURE_MEMORY          TEXT("Local\\OBSTextureMemory")
 
+#define OBS_KEEPALIVE_EVENT     TEXT("OBS_KeepAlive")
+
 #define CAPTURETYPE_MEMORY      1
 #define CAPTURETYPE_SHAREDTEX   2
 
@@ -48,6 +50,8 @@ inline HANDLE GetEvent(LPCTSTR lpEvent)
     return hEvent;
 }
 
+#pragma pack(push, 8)
+
 struct MemoryCopyData
 {
     UINT        lastRendered;
@@ -57,9 +61,8 @@ struct MemoryCopyData
 
 struct SharedTexData
 {
-    UINT        lastRendered;
     LONGLONG    frameTime;
-    HANDLE      texHandles[2];
+    DWORD       texHandle;
 };
 
 struct CaptureInfo
@@ -67,10 +70,13 @@ struct CaptureInfo
     UINT    captureType;
     DWORD   format;
     UINT    cx, cy;
-    HWND    hwndCapture;
     BOOL    bFlip;
 
     UINT    pitch;
     UINT    mapID;
     DWORD   mapSize;
+
+    DWORD   hwndCapture;
 };
+
+#pragma pack(pop)

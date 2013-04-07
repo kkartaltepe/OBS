@@ -20,14 +20,13 @@
 #pragma once
 
 class Scene;
+class SettingsPane;
 
 #define NUM_RENDER_BUFFERS 2
 
 static const int minClientWidth  = 700;
-static const int minClientHeight = 200;
+static const int minClientHeight = 275;
 
-
-#define OUTPUT_BUFFER_TIME 700
 
 
 struct AudioDeviceInfo
@@ -66,8 +65,14 @@ struct AudioDeviceList
     }
 };
 
-void GetAudioDevices(AudioDeviceList &deviceList);
+enum AudioDeviceType {
+    ADT_PLAYBACK,
+    ADT_RECORDING
+};
+
+void GetAudioDevices(AudioDeviceList &deviceList, AudioDeviceType deviceType);
 bool GetDefaultMicID(String &strVal);
+bool GetDefaultSpeakerID(String &strVal);
 
 //-------------------------------------------------------------------
 
@@ -99,6 +104,15 @@ public:
     virtual QWORD GetCurrentSentBytes()=0;
     virtual DWORD NumDroppedFrames() const=0;
     virtual DWORD NumTotalVideoFrames() const=0;
+};
+
+//-------------------------------------------------------------------
+
+struct TimedPacket
+{
+    List<BYTE> data;
+    DWORD timestamp;
+    PacketType type;
 };
 
 //-------------------------------------------------------------------
@@ -148,6 +162,9 @@ public:
     virtual bool SetBitRate(DWORD maxBitrate, DWORD bufferSize)=0;
 
     virtual void GetHeaders(DataPacket &packet)=0;
+    virtual void GetSEI(DataPacket &packet) {}
+
+    virtual void RequestKeyframe() {}
 
     virtual String GetInfoString() const=0;
 };
@@ -242,10 +259,50 @@ struct ClassInfo
 
 //----------------------------
 
+/* Event callback signiture definitions */
+typedef void (*OBS_CALLBACK)();
+typedef void (*OBS_STREAM_STATUS_CALLBACK)(bool /*streaming*/, bool /*previewOnly*/,
+                                           UINT /*bytesPerSec*/, double /*strain*/, 
+                                           UINT /*totalStreamtime*/, UINT /*numTotalFrames*/, 
+                                           UINT /*numDroppedFrames*/, UINT /*fps*/);
+typedef void (*OBS_SCENE_SWITCH_CALLBACK)(CTSTR);
+typedef void (*OBS_SOURCE_CHANGED_CALLBACK)(CTSTR /*sourceName*/, XElement* /*source*/); 
+typedef void (*OBS_VOLUME_CHANGED_CALLBACK)(float /*level*/, bool /*muted*/, bool /*finalFalue*/);
+
 struct PluginInfo
 {
     String strFile;
     HMODULE hModule;
+
+    /* Event Callbacks */
+
+    /* called on stream starting */
+    OBS_CALLBACK startStreamCallback;
+    
+    /* called on stream stopping */
+    OBS_CALLBACK stopStreamCallback;
+
+    /* called when stream stats are updated in stats window */
+    OBS_STREAM_STATUS_CALLBACK streamStatusCallback;
+
+    /* called when scenes are switched */
+    OBS_SCENE_SWITCH_CALLBACK sceneSwitchCallback;
+    
+    /* called when a scene is renamed, added, removed, or moved */
+    OBS_CALLBACK scenesChangedCallback;
+
+    /* called when the source order is changed */
+    OBS_CALLBACK sourceOrderChangedCallback;
+    
+    /* called when a source is changed in some way */
+    OBS_SOURCE_CHANGED_CALLBACK sourceChangedCallback;
+
+    /* called when a sources have been added or removed */
+    OBS_CALLBACK sourcesAddedOrRemovedCallback;
+
+    /* called when audio source volumes have changed */
+    OBS_VOLUME_CHANGED_CALLBACK micVolumeChangeCallback;
+    OBS_VOLUME_CHANGED_CALLBACK desktopVolumeChangeCallback;
 };
 
 //----------------------------
@@ -280,6 +337,9 @@ enum
     ID_GLOBALSOURCES,
     ID_PLUGINS,
     ID_DASHBOARD,
+    ID_MINIMIZERESTORE,
+
+    ID_SWITCHPROFILE,
 };
 
 enum
@@ -288,7 +348,10 @@ enum
     OBS_CALLHOTKEY,
     OBS_RECONNECT,
     OBS_SETSCENE,
+    OBS_SETSOURCEORDER,
+    OBS_SETSOURCERENDER,
     OBS_UPDATESTATUSBAR,
+    OBS_NOTIFICATIONAREA,
 };
 
 //----------------------------
@@ -363,6 +426,9 @@ struct VideoSegment
 
 //----------------------------
 
+struct FrameProcessInfo;
+
+//todo: this class has become way too big, it's horrible, and I should be ashamed of myself
 class OBS
 {
     friend class Scene;
@@ -379,10 +445,9 @@ class OBS
     //---------------------------------------------------
     // graphics stuff
 
-    ID3D10Texture2D *copyTextures[2];
-
-    Texture *mainRenderTextures[NUM_RENDER_BUFFERS];
-    Texture *yuvRenderTextures[NUM_RENDER_BUFFERS];
+    ID3D10Texture2D *copyTextures[NUM_RENDER_BUFFERS];
+    Texture         *mainRenderTextures[NUM_RENDER_BUFFERS];
+    Texture         *yuvRenderTextures[NUM_RENDER_BUFFERS];
 
     Texture *transitionTexture;
     bool    bTransitioning;
@@ -392,17 +457,21 @@ class OBS
     Shader  *solidVertexShader, *solidPixelShader;
 
     //---------------------------------------------------
-    // network
+
     NetworkStream *network;
 
     //---------------------------------------------------
-    // audio
+    // audio sources/encoder
+
     AudioSource  *desktopAudio;
     AudioSource  *micAudio;
+    List<AudioSource*> auxAudioSources;
+
     AudioEncoder *audioEncoder;
 
     //---------------------------------------------------
-    // video
+    // scene/encoder
+
     Scene                   *scene;
     VideoEncoder            *videoEncoder;
     HDC                     hCaptureDC;
@@ -426,39 +495,58 @@ class OBS
     }
 
     void SelectSources();
+    void CheckSources();
+    void SetSourceRender(CTSTR sourceName, bool render);
 
     //---------------------------------------------------
     // settings window
-    int     curSettingsSelection;
-    HWND    hwndSettings;
-    HWND    hwndCurrentSettings;
-    bool    bSettingsChanged;
 
-    inline void SetChangedSettings(bool bChanged)
-    {
-        EnableWindow(GetDlgItem(hwndSettings, IDC_APPLY), (bSettingsChanged = bChanged));
-    }
+    int                 curSettingsSelection;
+    HWND                hwndSettings;
+    HWND                hwndCurrentSettings;
+    bool                bSettingsChanged;
+    List<SettingsPane*> settingsPanes;
+    SettingsPane *      currentSettingsPane;
 
+    void   SetChangedSettings(bool bChanged);
+    void   CancelSettings();
     void   ApplySettings();
 
-    void   RefreshDownscales(HWND hwnd, int cx, int cy);
+    // Settings panes
+public:
+    void   AddSettingsPane(SettingsPane *pane);
+    void   RemoveSettingsPane(SettingsPane *pane);
+private:
+    void   AddBuiltInSettingsPanes();
 
-    static INT_PTR CALLBACK GeneralSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-    static INT_PTR CALLBACK EncoderSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-    static INT_PTR CALLBACK PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-    static INT_PTR CALLBACK VideoSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-    static INT_PTR CALLBACK AudioSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-    static INT_PTR CALLBACK AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+    friend class SettingsPane;
+    friend class SettingsGeneral;
+    friend class SettingsEncoding;
+    friend class SettingsPublish;
+    friend class SettingsVideo;
+    friend class SettingsAudio;
+    friend class SettingsAdvanced;
 
     //---------------------------------------------------
+    // mainly manly main window stuff
 
     String  strLanguage;
     bool    bTestStream;
     bool    bUseMultithreadedOptimizations;
     bool    bRunning;
-    int     renderFrameWidth, renderFrameHeight;
+    int     renderFrameWidth, renderFrameHeight; // The size of the preview only
+    int     renderFrameX, renderFrameY; // The offset of the preview inside the preview control
+    int     renderFrameCtrlWidth, renderFrameCtrlHeight; // The size of the entire preview control
+    int     oldRenderFrameCtrlWidth, oldRenderFrameCtrlHeight; // The size of the entire preview control before the user began to resize the window
+    HWND    hwndRenderMessage; // The text in the middle of the main window
+    bool    renderFrameIn1To1Mode;
     int     borderXSize, borderYSize;
     int     clientWidth, clientHeight;
+    bool    bPanelVisibleWindowed;
+    bool    bPanelVisibleFullscreen;
+    bool    bPanelVisible;
+    bool    bPanelVisibleProcessed;
+    bool    bDragResize;
     bool    bSizeChanging;
     bool    bResizeRenderView;
 
@@ -468,8 +556,12 @@ class OBS
     UINT    reconnectTimeout;
 
     bool    bDisableSceneSwitching;
+    bool    bChangingSources;
+    bool    bAlwaysOnTop;
+    bool    bFullscreenMode;
     bool    bEditMode;
     bool    bRenderViewEnabled;
+    bool    bForceRenderViewErase;
     bool    bShowFPS;
     bool    bMouseMoved;
     bool    bMouseDown;
@@ -478,57 +570,85 @@ class OBS
     ItemModifyType modifyType;
     SceneItem *scaleItem;
 
+    HMENU           hmenuMain; // Main window menu so we can hide it in fullscreen mode
+    WINDOWPLACEMENT fullscreenPrevPlacement;
+
     int     cpuInfo[4];
     bool    bSSE2Available;
 
     //---------------------------------------------------
+    // resolution/fps/downscale/etc settings
 
     int     lastRenderTarget;
     UINT    baseCX,   baseCY;
     UINT    scaleCX,  scaleCY;
     UINT    outputCX, outputCY;
     float   downscale;
+    int     downscaleType;
     UINT    frameTime, fps;
-    HANDLE  hMainThread;
-    HANDLE  hSceneMutex;
     bool    bUsing444;
 
     //---------------------------------------------------
+    // stats
 
     int ctsOffset;
     DWORD bytesPerSec;
     DWORD captureFPS;
     DWORD curFramesDropped;
+    DWORD totalStreamTime;
     double curStrain;
 
+    //---------------------------------------------------
+    // main capture loop stuff
+
+    int bufferingTime;
+
+    HANDLE  hMainThread;
+    HANDLE  hSceneMutex;
+
     List<VideoSegment> bufferedVideo;
-    bool BufferVideoData(const List<DataPacket> &inputPackets, const List<PacketType> &inputTypes, DWORD timestamp, VideoSegment &segmentOut);
 
-    DWORD totalStreamTime;
+    List<UINT> bufferedTimes;
+    List<UINT> ctsOffsets;
 
-    bool        bUseSyncFix;
-    List<UINT>  bufferedTimes;
+    bool bRecievedFirstAudioFrame, bSentHeaders, bFirstAudioPacket;
 
-    bool bRecievedFirstAudioFrame;
+    DWORD lastAudioTimestamp;
 
     QWORD firstSceneTimestamp;
+    QWORD latestVideoTime;
+
+    bool bUseCFR, bDupeFrames;
+
+    bool bWriteToFile;
+    VideoFileStream *fileStream;
+
+    bool bRequestKeyframe;
+    int  keyframeWait;
+
+    static DWORD STDCALL MainCaptureThread(LPVOID lpUnused);
+    bool BufferVideoData(const List<DataPacket> &inputPackets, const List<PacketType> &inputTypes, DWORD timestamp, VideoSegment &segmentOut);
+    bool ProcessFrame(FrameProcessInfo &frameInfo);
+    void MainCaptureLoop();
 
     //---------------------------------------------------
+    // main audio capture loop stuff
 
-    HANDLE  hSoundThread, hSoundDataMutex, hRequestAudioEvent;
+    HANDLE  hSoundThread, hSoundDataMutex;//, hRequestAudioEvent;
     QWORD   latestAudioTime;
-    float   desktopVol, micVol, curMicVol;
+
+    float   desktopVol, micVol, curMicVol, curDesktopVol;
     float   desktopPeak, micPeak;
     float   desktopMax, micMax;
     float   desktopMag, micMag;
     List<FrameAudio> pendingAudioFrames;
     bool    bForceMicMono;
-    float   micBoost;
+    float   desktopBoost, micBoost;
 
     HANDLE hAuxAudioMutex;
-    List<AudioSource*> auxAudioSources;
 
     //---------------------------------------------------
+    // hotkey stuff
 
     HANDLE hHotkeyMutex;
     HANDLE hHotkeyThread;
@@ -544,12 +664,19 @@ class OBS
 
     bool bStartStreamHotkeyDown, bStopStreamHotkeyDown;
 
-    //---------------------------------------------------
+    static DWORD STDCALL MainAudioThread(LPVOID lpUnused);
+    bool QueryNewAudio(QWORD &timestamp);
+    void EncodeAudioSegment(float *buffer, UINT numFrames, QWORD timestamp);
+    void MainAudioLoop();
 
-    bool bWriteToFile;
-    VideoFileStream *fileStream;
+    //---------------------------------------------------
+    // notification area icon
+    UINT wmExplorerRestarted;
+    bool bNotificationAreaIcon;
+    BOOL SetNotificationAreaIcon(DWORD dwMessage, int idIcon, const String &tooltip);
 
     //---------------------------------------------------
+    // random bla-haa
 
     String  streamReport;
 
@@ -566,6 +693,8 @@ class OBS
     HANDLE hInfoMutex;
     List<StreamInfo> streamInfoList;
     UINT streamInfoIDCounter;
+
+    HANDLE hStartupShutdownMutex;
 
     //---------------------------------------------------
 
@@ -618,23 +747,18 @@ class OBS
     //---------------------------------------------------
 
     void DeleteItems();
+    void SetSourceOrder(StringList &sourceNames);
     void MoveSourcesUp();
     void MoveSourcesDown();
     void MoveSourcesToTop();
     void MoveSourcesToBottom();
     void CenterItems();
+    void MoveItemsByPixels(int dx, int dy);
     void FitItemsToScreen();
     void ResetItemSizes();
 
     void Start();
     void Stop();
-
-    void MainCaptureLoop();
-    static DWORD STDCALL MainCaptureThread(LPVOID lpUnused);
-
-    bool QueryNewAudio(QWORD &timestamp);
-    void MainAudioLoop();
-    static DWORD STDCALL MainAudioThread(LPVOID lpUnused);
 
     static void STDCALL StartStreamHotkey(DWORD hotkey, UPARAM param, bool bDown);
     static void STDCALL StopStreamHotkey(DWORD hotkey, UPARAM param, bool bDown);
@@ -650,6 +774,13 @@ class OBS
 
     static DWORD STDCALL HotkeyThread(LPVOID lpUseless);
 
+    // Helpers for converting between window and actual coordinates for the preview
+    static Vect2 MapWindowToFramePos(Vect2 mousePos);
+    static Vect2 MapFrameToWindowPos(Vect2 framePos);
+    static Vect2 MapWindowToFrameSize(Vect2 windowSize);
+    static Vect2 MapFrameToWindowSize(Vect2 frameSize);
+    static Vect2 GetWindowToFrameScale();
+    static Vect2 GetFrameToWindowScale();
 
     static INT_PTR CALLBACK EnterGlobalSourceNameDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static INT_PTR CALLBACK EnterSourceNameDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -663,7 +794,8 @@ class OBS
     static INT_PTR CALLBACK SettingsDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     void ResizeRenderFrame(bool bRedrawRenderFrame);
-    void ResizeWindow(bool bRedrawRenderFrame);
+    void UpdateRenderViewMessage();
+    void ProcessPanelVisibile(bool fromResizeWindow = false);
 
     void ToggleCapturing();
 
@@ -681,6 +813,9 @@ class OBS
 
     void CallHotkey(DWORD hotkeyID, bool bDown);
 
+    static void AddProfilesToMenu(HMENU menu);
+    static void ResetProfileMenu();
+
     void SetStatusBarData();
 
     static void ClearStatusBar();
@@ -691,6 +826,11 @@ class OBS
 public:
     OBS();
     ~OBS();
+
+    void ResizeWindow(bool bRedrawRenderFrame);
+    void SetFullscreenMode(bool fullscreen);
+
+    void RequestKeyframe(int waitTime);
 
     inline void AddAudioSource(AudioSource *source)
     {
@@ -706,6 +846,7 @@ public:
     }
 
     inline QWORD GetAudioTime() const {return latestAudioTime;}
+    inline QWORD GetVideoTime() const {return latestVideoTime;}
 
     char* EncMetaData(char *enc, char *pend, bool bFLVFile=false);
 
@@ -713,8 +854,10 @@ public:
 
     void GetBaseSize(UINT &width, UINT &height) const;
 
-    inline void GetRenderFrameSize(UINT &width, UINT &height) const    {width = renderFrameWidth; height = renderFrameHeight;}
-    inline void GetOutputSize(UINT &width, UINT &height) const         {width = outputCX;         height = outputCY;}
+    inline void GetRenderFrameSize(UINT &width, UINT &height) const         {width = renderFrameWidth; height = renderFrameHeight;}
+    inline void GetRenderFrameOffset(UINT &x, UINT &y) const                {x = renderFrameX; y = renderFrameY;}
+    inline void GetRenderFrameControlSize(UINT &width, UINT &height) const  {width = renderFrameCtrlWidth; height = renderFrameCtrlHeight;}
+    inline void GetOutputSize(UINT &width, UINT &height) const              {width = outputCX;         height = outputCY;}
 
     inline Vect2 GetBaseSize() const
     {
@@ -723,8 +866,10 @@ public:
         return Vect2(float(width), float(height));
     }
 
-    inline Vect2 GetOutputSize()      const {return Vect2(float(outputCX), float(outputCY));}
-    inline Vect2 GetRenderFrameSize() const {return Vect2(float(renderFrameWidth), float(renderFrameHeight));}
+    inline Vect2 GetOutputSize()      const         {return Vect2(float(outputCX), float(outputCY));}
+    inline Vect2 GetRenderFrameSize() const         {return Vect2(float(renderFrameWidth), float(renderFrameHeight));}
+    inline Vect2 GetRenderFrameOffset() const       {return Vect2(float(renderFrameX), float(renderFrameY));}
+    inline Vect2 GetRenderFrameControlSize() const  {return Vect2(float(renderFrameCtrlWidth), float(renderFrameCtrlHeight));}
 
     inline bool SSE2Available() const {return bSSE2Available;}
 
@@ -763,25 +908,53 @@ public:
 
     //---------------------------------------------------------------------------
 
+    inline static CTSTR GetCurrentProfile() {return GlobalConfig->GetStringPtr(TEXT("General"), TEXT("Profile"));}
+    static void GetProfiles(StringList &profileList);
+
+    //---------------------------------------------------------------------------
+
     virtual void RegisterSceneClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc);
     virtual void RegisterImageSourceClass(CTSTR lpClassName, CTSTR lpDisplayName, OBSCREATEPROC createProc, OBSCONFIGPROC configProc);
 
     virtual ImageSource* CreateImageSource(CTSTR lpClassName, XElement *data);
 
     virtual bool SetScene(CTSTR lpScene);
+    virtual void InsertSourceItem(UINT index, LPWSTR name, bool checked);
+
+    //---------------------------------------------------------------------------
+    // volume stuff
+    virtual void SetDesktopVolume(float val, bool finalValue);
+    virtual float GetDesktopVolume();
+    virtual void ToggleDesktopMute();
+    virtual bool GetDesktopMuted();
+    
+    virtual void SetMicVolume(float val, bool finalValue);
+    virtual float GetMicVolume();
+    virtual void ToggleMicMute();
+    virtual bool GetMicMuted();
+
+    //---------------------------------------------------------------------------
+
+    // event reporting functions
+    virtual void ReportStartStreamTrigger();
+    virtual void ReportStopStreamTrigger();
+    virtual void ReportStreamStatus(bool streaming, bool previewOnly = false, 
+                                   UINT bytesPerSec = 0, double strain = 0, 
+                                   UINT totalStreamtime = 0, UINT numTotalFrames = 0,
+                                   UINT numDroppedFrames = 0, UINT fps = 0);
+    virtual void ReportSwitchScenes(CTSTR scene);
+    virtual void ReportScenesChanged();
+    virtual void ReportSourceOrderChanged();
+    virtual void ReportSourceChanged(CTSTR sourceName, XElement* source);
+    virtual void ReportSourcesAddedOrRemoved();
+    virtual void ReportMicVolumeChange(float level, bool muted, bool finalValue);
+    virtual void ReportDesktopVolumeChange(float level, bool muted, bool finalValue);
+
+    // notification area icon functions
+    BOOL ShowNotificationAreaIcon();
+    BOOL UpdateNotificationAreaIcon();
+    BOOL HideNotificationAreaIcon();
 };
 
-inline QWORD GetQPCTimeMS(LONGLONG clockFreq)
-{
-    LARGE_INTEGER currentTime;
-    QueryPerformanceCounter(&currentTime);
-
-    QWORD timeVal = 1000 * currentTime.QuadPart / clockFreq;
-
-    return timeVal;
-}
-
-ID3D10Blob* CompileShader(CTSTR lpShader, LPCSTR lpTarget);
-
 LONG CALLBACK OBSExceptionHandler (PEXCEPTION_POINTERS exceptionInfo);
-
+String CurrentDateTime();

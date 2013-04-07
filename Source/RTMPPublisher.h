@@ -28,39 +28,74 @@ struct NetworkPacket
 //max latency in milliseconds allowed when using the send buffer
 const DWORD maxBufferTime = 600;
 
-struct PacketTimeSize
+typedef enum
+{
+    LL_MODE_NONE = 0,
+    LL_MODE_FIXED,
+    LL_MODE_AUTO,
+} latencymode_t;
+
+/*struct PacketTimeSize
 {
     inline PacketTimeSize(DWORD timestamp, DWORD size) : timestamp(timestamp), size(size) {}
 
     DWORD timestamp;
     DWORD size;
-};
+};*/
 
 class RTMPPublisher : public NetworkStream
 {
     friend class DelayedPublisher;
 
-    List<PacketTimeSize> packetSizeRecord;
-    DWORD outputRateSize;
+    /*List<PacketTimeSize> packetSizeRecord;
+    DWORD outputRateSize;*/
 
-    bool numStartFrames, bNetworkStrain;
-    double dNetworkStrain;
-    int ignoreCount;
-    DWORD currentBufferSize, sendTime;
-    DWORD bufferTime, outputRateWindowTime, dropThreshold, connectTime;
-    List<NetworkPacket> queuedPackets;
-
-    bool bStreamStarted;
-    bool bConnecting, bConnected;
+    //-----------------------------------------------
 
     static DWORD WINAPI CreateConnectionThread(RTMPPublisher *publisher);
 
     void BeginPublishingInternal();
 
-    int FlushSendBuffer();
     static int BufferedSend(RTMPSockBuf *sb, const char *buf, int len, RTMPPublisher *network);
 
+    static String strRTMPErrors;
+
+    static void librtmpErrorCallback(int level, const char *format, va_list vl);
+    static String GetRTMPErrors();
+
 protected:
+
+    bool numStartFrames, bNetworkStrain;
+    double dNetworkStrain;
+
+    //-----------------------------------------------
+    // stream startup stuff
+    bool bStreamStarted;
+    bool bConnecting, bConnected;
+    DWORD firstTimestamp;
+    bool bSentFirstKeyframe, bSentFirstAudio;
+
+    List<TimedPacket> bufferedPackets;
+    DWORD audioTimeOffset;
+    bool bBufferFull;
+
+    bool bFirstKeyframe;
+    UINT FindClosestQueueIndex(DWORD timestamp);
+    UINT FindClosestBufferIndex(DWORD timestamp);
+    void InitializeBuffer();
+    void SendPacketForReal(BYTE *data, UINT size, DWORD timestamp, PacketType type);
+
+    //-----------------------------------------------
+    // frame drop stuff
+
+    DWORD minFramedropTimestsamp;
+    DWORD dropThreshold, bframeDropThreshold;
+    List<NetworkPacket> queuedPackets;
+    UINT currentBufferSize;//, outputRateWindowTime;
+    UINT lastBFrameDropTime;
+
+    //-----------------------------------------------
+
     RTMP *rtmp;
 
     HANDLE hSendSempahore;
@@ -84,32 +119,32 @@ protected:
     UINT numPFramesDumped;
     UINT numBFramesDumped;
 
-    BOOL bUseSendBuffer;
-    List<BYTE> sendBuffer;
-    int curSendBufferLen;
-
-    DWORD numVideoPacketsBuffered;
-    DWORD firstBufferedVideoFrameTimestamp;
-
     BYTE *dataBuffer;
     int dataBufferSize;
 
     int curDataBufferLen;
 
+    latencymode_t lowLatencyMode;
+    int latencyFactor;
+    int totalTimesWaited;
+    int totalBytesWaited;
+
     void SendLoop();
     void SocketLoop();
-    int RTMPPublisher::FlushDataBuffer();
+    int FlushDataBuffer();
     static DWORD SendThread(RTMPPublisher *publisher);
     static DWORD SocketThread(RTMPPublisher *publisher);
 
     void DropFrame(UINT id);
     bool DoIFrameDelay(bool bBFramesOnly);
 
-    void ProcessPackets(DWORD timestamp);
+    virtual void ProcessPackets();
+
+    virtual void RequestKeyframe(int waitTime);
 
 public:
     RTMPPublisher();
-    bool Init(RTMP *rtmpIn, UINT tcpBufferSize, BOOL bUseSendBuffer, UINT sendBufferSize);
+    bool Init(RTMP *rtmpIn, UINT tcpBufferSize);
     ~RTMPPublisher();
 
     void SendPacket(BYTE *data, UINT size, DWORD timestamp, PacketType type);

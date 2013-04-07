@@ -37,9 +37,22 @@ class MMDeviceAudioSource : public AudioSource
     bool bIsMic;
     bool bFirstFrameReceived;
 
-    UINT32 numFramesRead;
+    //UINT32 numFramesRead;
 
     String strDeviceName;
+
+    bool bUseVideoTime;
+    QWORD lastVideoTime;
+    QWORD curVideoTime;
+
+    UINT sampleWindowSize;
+    List<float> inputBuffer;
+    UINT inputBufferSize;
+    QWORD firstTimestamp;
+
+    bool bUseQPC;
+
+    QWORD GetTimestamp(QWORD qpcTimestamp);
 
 protected:
     virtual bool GetNextBuffer(void **buffer, UINT *numFrames, QWORD *timestamp);
@@ -94,13 +107,12 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
         return false;
     }
 
-    this->timeOffset = timeOffset;
     bIsMic = bMic;
 
-    if(bMic)
-        err = mmEnumerator->GetDevice(lpID, &mmDevice);
+    if (scmpi(lpID, TEXT("Default")) == 0)
+        err = mmEnumerator->GetDefaultAudioEndpoint(bMic ? eCapture : eRender, bMic ? eCommunications : eConsole, &mmDevice);
     else
-        err = mmEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &mmDevice);
+        err = mmEnumerator->GetDevice(lpID, &mmDevice);
 
     if(FAILED(err))
     {
@@ -137,6 +149,16 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
     {
         Log(TEXT("------------------------------------------"));
         Log(TEXT("Using auxilary audio input: %s"), GetDeviceName());
+
+        bUseQPC = GlobalConfig->GetInt(TEXT("Audio"), TEXT("UseMicQPC")) != 0;
+    }
+    else
+    {
+        Log(TEXT("------------------------------------------"));
+        Log(TEXT("Using desktop audio input: %s"), GetDeviceName());
+
+        bUseVideoTime = AppConfig->GetInt(TEXT("Audio"), TEXT("SyncToVideoTime")) != 0;
+        //SetTimeOffset(GlobalConfig->GetInt(TEXT("Audio"), TEXT("GlobalAudioTimeAdjust")));
     }
 
     //-----------------------------------------------------------------
@@ -149,6 +171,13 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
         AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not get mix format from audio client = %08lX"), (BOOL)bMic, err);
         return false;
     }
+
+    bool  bFloat;
+    UINT  inputChannels;
+    UINT  inputSamplesPerSec;
+    UINT  inputBitsPerSample;
+    UINT  inputBlockSize;
+    DWORD inputChannelMask;
 
     //the internal audio engine should always use floats (or so I read), but I suppose just to be safe better check
     if(pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
@@ -173,6 +202,8 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
     inputBitsPerSample  = 32;
     inputBlockSize      = pwfx->nBlockAlign;
     inputSamplesPerSec  = pwfx->nSamplesPerSec;
+
+    sampleWindowSize    = (inputSamplesPerSec/100);
 
     DWORD flags = bMic ? 0 : AUDCLNT_STREAMFLAGS_LOOPBACK;
     err = mmClient->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, ConvertMSTo100NanoSec(5000), 0, pwfx, NULL);
@@ -203,7 +234,7 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
 
     //-----------------------------------------------------------------
 
-    InitAudioData();
+    InitAudioData(bFloat, inputChannels, inputSamplesPerSec, inputBitsPerSample, inputBlockSize, inputChannelMask, !bMic);
 
     return true;
 }
@@ -220,12 +251,144 @@ void MMDeviceAudioSource::StopCapture()
         mmClient->Stop();
 }
 
+QWORD MMDeviceAudioSource::GetTimestamp(QWORD qpcTimestamp)
+{
+    QWORD newTimestamp;
+
+    if(bIsMic)
+    {
+        newTimestamp = (bUseQPC) ? qpcTimestamp : App->GetAudioTime();
+        newTimestamp += GetTimeOffset();
+    }
+    else
+    {
+        //we're doing all these checks because device timestamps are only reliable "sometimes"
+        if(!bFirstFrameReceived)
+        {
+            QWORD curTime = GetQPCTimeMS();
+
+            newTimestamp = qpcTimestamp;
+
+            curVideoTime = lastVideoTime = App->GetVideoTime();
+
+            if(bUseVideoTime || newTimestamp < (curTime-App->bufferingTime) || newTimestamp > (curTime+2000))
+            {
+                if(!bUseVideoTime)
+                    Log(TEXT("Bad timestamp detected, syncing audio to video time"));
+                else
+                    Log(TEXT("Syncing audio to video time"));
+
+                SetTimeOffset(GetTimeOffset()-int(lastVideoTime-App->GetSceneTimestamp()));
+                bUseVideoTime = true;
+
+                newTimestamp = lastVideoTime+GetTimeOffset();
+            }
+
+            bFirstFrameReceived = true;
+        }
+        else
+        {
+            QWORD newVideoTime = App->GetVideoTime();
+
+            if(newVideoTime != lastVideoTime)
+                curVideoTime = lastVideoTime = newVideoTime;
+            else
+                curVideoTime += 10;
+
+            newTimestamp = (bUseVideoTime) ? curVideoTime : qpcTimestamp;
+            newTimestamp += GetTimeOffset();
+        }
+
+        App->latestAudioTime = newTimestamp;
+    }
+
+    return newTimestamp;
+}
+
 bool MMDeviceAudioSource::GetNextBuffer(void **buffer, UINT *numFrames, QWORD *timestamp)
+{
+    UINT captureSize = 0;
+    HRESULT hRes;
+    
+    while (true) {
+        if (inputBufferSize >= sampleWindowSize*GetChannelCount())
+            break;
+
+        //---------------------------------------------------------
+
+        hRes = mmCapture->GetNextPacketSize(&captureSize);
+
+        if (FAILED(hRes)) {
+            RUNONCE AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetNextPacketSize failed, result = %08lX"), hRes);
+            return false;
+        }
+
+        if (!captureSize)
+            return false;
+
+        //---------------------------------------------------------
+
+        LPBYTE captureBuffer;
+        UINT32 numFramesRead;
+        DWORD dwFlags = 0;
+
+        UINT64 devPosition, qpcTimestamp;
+        hRes = mmCapture->GetBuffer(&captureBuffer, &numFramesRead, &dwFlags, &devPosition, &qpcTimestamp);
+
+        if (FAILED(hRes)) {
+            RUNONCE AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetBuffer failed, result = %08lX"), hRes);
+            return false;
+        }
+
+        if (inputBufferSize) {
+            double timeAdjust = double(inputBufferSize/GetChannelCount());
+            timeAdjust /= (double(GetSamplesPerSec())*0.0000001);
+
+            qpcTimestamp -= UINT64(timeAdjust);
+        }
+
+        qpcTimestamp /= 10000;
+
+        firstTimestamp = GetTimestamp(qpcTimestamp);
+
+        //---------------------------------------------------------
+
+        UINT totalFloatsRead = numFramesRead*GetChannelCount();
+        UINT newInputBufferSize = inputBufferSize + totalFloatsRead;
+        if (newInputBufferSize > inputBuffer.Num())
+            inputBuffer.SetSize(newInputBufferSize);
+
+        SSECopy(inputBuffer.Array()+inputBufferSize, captureBuffer, totalFloatsRead*sizeof(float));
+        inputBufferSize = newInputBufferSize;
+
+        mmCapture->ReleaseBuffer(numFramesRead);
+    }
+
+    *numFrames = sampleWindowSize;
+    *buffer = (void*)inputBuffer.Array();
+    *timestamp = firstTimestamp;
+
+    return true;
+}
+
+void MMDeviceAudioSource::ReleaseBuffer()
+{
+    UINT sampleSizeFloats = sampleWindowSize*GetChannelCount();
+    if (inputBufferSize > sampleSizeFloats)
+        SSECopy(inputBuffer.Array(), inputBuffer.Array()+sampleSizeFloats, (inputBufferSize-sampleSizeFloats)*sizeof(float));
+
+    inputBufferSize -= sampleSizeFloats;
+}
+
+/*bool MMDeviceAudioSource::GetNextBuffer(void **buffer, UINT *numFrames, QWORD *timestamp)
 {
     UINT captureSize = 0;
     HRESULT err = mmCapture->GetNextPacketSize(&captureSize);
     if(FAILED(err))
+    {
+        RUNONCE AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetNextPacketSize failed, result = %08lX"), err);
         return false;
+    }
 
     numFramesRead = 0;
 
@@ -239,9 +402,11 @@ bool MMDeviceAudioSource::GetNextBuffer(void **buffer, UINT *numFrames, QWORD *t
         err = mmCapture->GetBuffer(&captureBuffer, &numFramesRead, &dwFlags, &devPosition, &qpcTimestamp);
         if(FAILED(err))
         {
-            RUNONCE AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetBuffer failed"));
+            RUNONCE AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetBuffer failed, result = %08lX"), err);
             return false;
         }
+
+        qpcTimestamp /= 10000;
 
         //-----------------------------------------------------------------
         // timestamp bs
@@ -250,38 +415,48 @@ bool MMDeviceAudioSource::GetNextBuffer(void **buffer, UINT *numFrames, QWORD *t
 
         if(bIsMic)
         {
-            newTimestamp = App->GetAudioTime()+timeOffset;
-            //Log(TEXT("newTimestamp: %llu"), newTimestamp);
+            newTimestamp = (bUseQPC) ? qpcTimestamp : App->GetAudioTime();
+            newTimestamp += GetTimeOffset();
         }
         else
         {
-            if(dwFlags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR)
-            {
-                RUNONCE AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: woa woa woa, getting timestamp errors from the audio subsystem.  device = %s"), GetDeviceName());
-                newTimestamp = lastUsedTimestamp + numFramesRead*1000/inputSamplesPerSec;
-            }
-            else
-                newTimestamp = qpcTimestamp/10000;
-
-            //have to do this crap to account for broken devices or device drivers.  absolutely unbelievable.
+            //we're doing all these checks because device timestamps are only reliable "sometimes"
             if(!bFirstFrameReceived)
             {
-                LARGE_INTEGER clockFreq;
-                QueryPerformanceFrequency(&clockFreq);
-                QWORD curTime = GetQPCTimeMS(clockFreq.QuadPart);
+                QWORD curTime = GetQPCTimeMS();
 
-                if(newTimestamp < (curTime-OUTPUT_BUFFER_TIME) || newTimestamp > (curTime+2000))
+                newTimestamp = qpcTimestamp;
+
+                curVideoTime = lastVideoTime = App->GetVideoTime();
+
+                if(bUseVideoTime || newTimestamp < (curTime-App->bufferingTime) || newTimestamp > (curTime+2000))
                 {
-                    CrashError(TEXT("MMDeviceAudioSource::GetNextBuffer: Got bad audio timestamp offset %lld from device: '%s'.  curTime: %llu, newTimestamp: %llu"), (LONGLONG)(newTimestamp - curTime), GetDeviceName(), curTime, newTimestamp);
-                    lastUsedTimestamp = newTimestamp = curTime;
+                    if(!bUseVideoTime)
+                        Log(TEXT("Bad timestamp detected, syncing audio to video time"));
+                    else
+                        Log(TEXT("Syncing audio to video time"));
+
+                    SetTimeOffset(GetTimeOffset()-int(lastVideoTime-App->GetSceneTimestamp()));
+                    bUseVideoTime = true;
+
+                    newTimestamp = lastVideoTime+GetTimeOffset();
                 }
-                else
-                    lastUsedTimestamp = newTimestamp;
 
                 bFirstFrameReceived = true;
             }
+            else
+            {
+                QWORD newVideoTime = App->GetVideoTime();
 
-            //desktop audio is best audio!  use it for the base audio
+                if(newVideoTime != lastVideoTime)
+                    curVideoTime = lastVideoTime = newVideoTime;
+                else
+                    curVideoTime += 10;
+
+                newTimestamp = (bUseVideoTime) ? curVideoTime : qpcTimestamp;
+                newTimestamp += GetTimeOffset();
+            }
+
             App->latestAudioTime = newTimestamp;
         }
 
@@ -302,3 +477,4 @@ void MMDeviceAudioSource::ReleaseBuffer()
 {
     mmCapture->ReleaseBuffer(numFramesRead);
 }
+*/

@@ -51,7 +51,6 @@ VOID GenerateGUID(String &strGUID)
 
 BOOL CalculateFileHash (TCHAR *path, BYTE *hash)
 {
-    BYTE buff[65536];
     HCRYPTHASH hHash;
 
     if (!CryptCreateHash(hProvider, CALG_SHA1, 0, 0, &hHash))
@@ -61,6 +60,8 @@ BOOL CalculateFileHash (TCHAR *path, BYTE *hash)
 
     if (file.Open(path, XFILE_READ, OPEN_EXISTING))
     {
+        BYTE buff[65536];
+
         for (;;)
         {
             DWORD read = file.Read(buff, sizeof(buff));
@@ -226,11 +227,11 @@ BOOL ParseUpdateManifest (TCHAR *path, BOOL *updatesAvailable, String &descripti
             filePath << path;
             filePath << fileName;
 
-            BYTE fileHash[20];
-            TCHAR fileHashString[41];
-
             if (OSFileExists(filePath))
             {
+                BYTE fileHash[20];
+                TCHAR fileHashString[41];
+
                 if (!CalculateFileHash(filePath, fileHash))
                     continue;
                 
@@ -360,9 +361,15 @@ DWORD WINAPI CheckUpdateThread (VOID *arg)
                         execInfo.cbSize = sizeof(execInfo);
                         execInfo.lpFile = updateFilePath;
 #ifndef _WIN64
-                        execInfo.lpParameters = TEXT("Win32");
+                        if (bIsPortable)
+                            execInfo.lpParameters = TEXT("Win32 Portable");
+                        else
+                            execInfo.lpParameters = TEXT("Win32");
 #else
-                        execInfo.lpParameters = TEXT("Win64");
+                        if (bIsPortable)
+                            execInfo.lpParameters = TEXT("Win64 Portable");
+                        else
+                            execInfo.lpParameters = TEXT("Win64");
 #endif
                         execInfo.lpDirectory = cwd;
                         execInfo.nShow = SW_SHOWNORMAL;
@@ -372,6 +379,10 @@ DWORD WINAPI CheckUpdateThread (VOID *arg)
                             AppWarning(TEXT("Can't launch updater '%s': %d"), updateFilePath, GetLastError());
                             goto abortUpdate;
                         }
+
+                        //force OBS to perform another update check immediately after updating in case of issues
+                        //with the new version
+                        GlobalConfig->SetInt(TEXT("General"), TEXT("LastUpdateCheck"), 0);
 
                         //since we're in a separate thread we can't just PostQuitMessage ourselves
                         SendMessage(hwndMain, WM_CLOSE, 0, 0);

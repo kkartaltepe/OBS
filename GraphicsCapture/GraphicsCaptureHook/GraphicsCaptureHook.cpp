@@ -18,7 +18,6 @@
 
 
 #include "GraphicsCaptureHook.h"
-#include <shlobj.h>
 
 
 HANDLE hSignalRestart=NULL, hSignalEnd=NULL;
@@ -43,12 +42,17 @@ LARGE_INTEGER clockFreq, startTime;
 LONGLONG prevElapsedTime;
 DWORD startTick;
 
+wstring strKeepAlive;
+LONGLONG keepAliveTime = 0;
+
+
 void WINAPI OSInitializeTimer()
 {
     QueryPerformanceFrequency(&clockFreq);
     QueryPerformanceCounter(&startTime);
     startTick = GetTickCount();
     prevElapsedTime = 0;
+    keepAliveTime = 0;
 }
 
 LONGLONG WINAPI OSGetTimeMicroseconds()
@@ -129,7 +133,7 @@ void QuickLog(LPCSTR lpText)
     HANDLE hFile = CreateFile(TEXT("d:\\log.txt"), GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, 0, NULL);
     DWORD bla;
     SetFilePointer(hFile, 0, 0, FILE_END);
-    WriteFile(hFile, lpText, strlen(lpText), &bla, NULL);
+    WriteFile(hFile, lpText, (DWORD)strlen(lpText), &bla, NULL);
     FlushFileBuffers(hFile);
     CloseHandle(hFile);
 }
@@ -205,44 +209,24 @@ void DestroySharedMemory()
 
 
 bool bD3D9Hooked = false;
-bool bD3D10Hooked = false;
-bool bD3D101Hooked = false;
-bool bD3D11Hooked = false;
+bool bDXGIHooked = false;
 bool bGLHooked = false;
 bool bDirectDrawHooked = false;
 
 inline bool AttemptToHookSomething()
 {
     bool bFoundSomethingToHook = false;
-    if(!bD3D11Hooked && InitD3D11Capture())
-    {
-        logOutput << "D3D11 Present" << endl;
-        bFoundSomethingToHook = true;
-        bD3D11Hooked = true;
-        bD3D101Hooked = true;
-        bD3D10Hooked = true;
-    }
     if(!bD3D9Hooked && InitD3D9Capture())
     {
         logOutput << "D3D9 Present" << endl;
         bFoundSomethingToHook = true;
         bD3D9Hooked = true;
     }
-    if(!bD3D101Hooked && InitD3D101Capture())
+    if(!bDXGIHooked && InitDXGICapture())
     {
-        logOutput << "D3D10.1 Present" << endl;
+        logOutput << "DXGI Present" << endl;
         bFoundSomethingToHook = true;
-        bD3D11Hooked = true;
-        bD3D101Hooked = true;
-        bD3D10Hooked = true;
-    }
-    if(!bD3D10Hooked && InitD3D10Capture())
-    {
-        logOutput << "D3D10 Present" << endl;
-        bFoundSomethingToHook = true;
-        bD3D11Hooked = true;
-        bD3D101Hooked = true;
-        bD3D10Hooked = true;
+        bDXGIHooked = true;
     }
     if(!bGLHooked && InitGLCapture())
     {
@@ -282,6 +266,10 @@ DWORD WINAPI CaptureThread(HANDLE hDllMainThread)
 
     if(!logOutput.is_open())
         logOutput.open(lpLogPath, ios_base::in | ios_base::out | ios_base::trunc);
+
+    wstringstream str;
+    str << OBS_KEEPALIVE_EVENT << int(GetCurrentProcessId());
+    strKeepAlive = str.str();
 
     WNDCLASS wc;
     ZeroMemory(&wc, sizeof(wc));

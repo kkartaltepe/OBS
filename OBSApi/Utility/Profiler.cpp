@@ -145,13 +145,13 @@ BOOL bProfilingEnabled = FALSE;
 HANDLE hProfilerTimer = NULL;
 
 
-void STDCALL EnableProfiling(BOOL bEnable, float minPercentage, float minTime)
+void STDCALL EnableProfiling(BOOL bEnable, float pminPercentage, float pminTime)
 {
     //if(engine && !engine->InEditor())
     bProfilingEnabled = bEnable;
 
-    minPercentage = minPercentage;
-    minTime = minTime;
+    minPercentage = pminPercentage;
+    minTime = pminTime;
 }
 
 void STDCALL DumpProfileData()
@@ -196,13 +196,16 @@ ProfilerNode::ProfilerNode(CTSTR lpName, bool bSingularize)
         if(!parent->lpName) return; //profiling was disabled when parent was created, so exit to avoid inconsistent results
 
         ProfileNodeInfo *parentInfo = parent->info;
-        info = parentInfo->FindSubProfile(lpName);
-        if(!info)
+        if(parentInfo)
         {
-            info = new ProfileNodeInfo;
-            parentInfo->Children << info;
-            info->lpName = lpName;
-            info->bSingular = bSingularize;
+            info = parentInfo->FindSubProfile(lpName);
+            if(!info)
+            {
+                info = new ProfileNodeInfo;
+                parentInfo->Children << info;
+                info->lpName = lpName;
+                info->bSingular = bSingularize;
+            }
         }
     }
     else if(bProfilingEnabled)
@@ -217,7 +220,8 @@ ProfilerNode::ProfilerNode(CTSTR lpName, bool bSingularize)
     else
         return;
 
-    ++info->numCalls;
+    if (info)
+        ++info->numCalls;
 
     this->lpName = lpName;
 

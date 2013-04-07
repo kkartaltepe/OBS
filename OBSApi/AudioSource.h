@@ -31,11 +31,17 @@ struct AudioSegment
     List<float> audioData;
     QWORD timestamp;
 
+    inline AudioSegment(float *data, UINT numFloats, QWORD timestamp) : timestamp(timestamp)
+    {
+        audioData.CopyArray(data, numFloats);
+    }
+
     inline void ClearData()
     {
         audioData.Clear();
     }
 };
+
 
 class BASE_EXPORT AudioSource
 {
@@ -45,10 +51,16 @@ class BASE_EXPORT AudioSource
 
     //-----------------------------------------
 
-    List<AudioSegment> audioSegments;
+    List<AudioFilter*> audioFilters;
 
+    //-----------------------------------------
+
+    List<AudioSegment*> audioSegments;
+
+    bool bSmoothTimestamps;
     bool bFirstBaseFrameReceived;
     QWORD lastSentTimestamp;
+    int timeOffset;
 
     //-----------------------------------------
 
@@ -61,22 +73,28 @@ class BASE_EXPORT AudioSource
     List<float> tempBuffer;
     List<float> tempResampleBuffer;
 
-protected:
-
-    int timeOffset;
-
     //-----------------------------------------
 
-    bool bFloat;
-    UINT inputChannels;
-    UINT inputSamplesPerSec;
-    UINT inputBitsPerSample;
-    UINT inputBlockSize;
+    bool  bFloat;
+    UINT  inputChannels;
+    UINT  inputSamplesPerSec;
+    UINT  inputBitsPerSample;
+    UINT  inputBlockSize;
     DWORD inputChannelMask;
 
     QWORD lastUsedTimestamp;
 
-    void InitAudioData();
+    //-----------------------------------------
+
+    float sourceVolume;
+
+    //-----------------------------------------
+
+    void AddAudioSegment(AudioSegment *segment, float curVolume);
+
+protected:
+
+    void InitAudioData(bool bFloat, UINT channels, UINT samplesPerSec, UINT bitsPerSample, UINT blockSize, DWORD channelMask, bool bSmoothTimestamps);
 
     //-----------------------------------------
 
@@ -91,6 +109,7 @@ public:
 
     //-----------------------------------------
 
+    AudioSource();
     virtual ~AudioSource();
 
     virtual UINT QueryAudio(float curVolume);
@@ -101,9 +120,24 @@ public:
 
     virtual QWORD GetBufferedTime();
 
-    virtual void StartCapture() {}
-    virtual void StopCapture() {}
+    virtual void StartCapture();
+    virtual void StopCapture();
 
-    inline void SetTimeOffset(int newOffset) {timeOffset = newOffset;}
+    UINT GetChannelCount() const;
+    UINT GetSamplesPerSec() const;
+
+    int  GetTimeOffset() const;
+    void SetTimeOffset(int newOffset);
+
+    void SetVolume(float fVal);
+    float GetVolume() const;
+
+    UINT NumAudioFilters() const;
+    AudioFilter* GetAudioFilter(UINT id);
+
+    void AddAudioFilter(AudioFilter *filter);
+    void InsertAudioFilter(UINT pos, AudioFilter *filter);
+    void RemoveAudioFilter(AudioFilter *filter);
+    void RemoveAudioFilter(UINT id);
 };
 

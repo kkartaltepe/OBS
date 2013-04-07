@@ -23,7 +23,6 @@
 void GetDisplayDevices(DeviceOutputs &deviceList)
 {
     HRESULT err;
-    UINT count = 0;
 
     deviceList.ClearData();
 
@@ -44,7 +43,7 @@ void GetDisplayDevices(DeviceOutputs &deviceList)
             Log(TEXT("------------------------------------------"));
 
             DXGI_ADAPTER_DESC adapterDesc;
-            if(err = SUCCEEDED(giAdapter->GetDesc(&adapterDesc)))
+            if(SUCCEEDED(err = giAdapter->GetDesc(&adapterDesc)))
             {
                 DeviceOutputData &deviceData = *deviceList.devices.CreateNew();
                 deviceData.strDevice = adapterDesc.Description;
@@ -101,7 +100,7 @@ void LogVideoCardStats()
             Log(TEXT("------------------------------------------"));
 
             DXGI_ADAPTER_DESC adapterDesc;
-            if(err = SUCCEEDED(giAdapter->GetDesc(&adapterDesc)))
+            if(SUCCEEDED(err = giAdapter->GetDesc(&adapterDesc)))
             {
                 Log(TEXT("Adapter %u"), i);
                 Log(TEXT("  Video Adapter: %s"), adapterDesc.Description);
@@ -453,8 +452,6 @@ void D3D10System::LoadVertexBuffer(VertexBuffer* vb)
 {
     if(vb != curVertexBuffer)
     {
-        UINT offset = 0;
-
         D3D10VertexBuffer *d3dVB = static_cast<D3D10VertexBuffer*>(vb);
         if(curVertexShader)
         {
@@ -869,3 +866,10 @@ void D3D10System::ResizeView()
     backBuffer->Release();
 }
 
+void D3D10System::CopyTexture(Texture *texDest, Texture *texSrc)
+{
+    D3D10Texture *d3d10Dest = static_cast<D3D10Texture*>(texDest);
+    D3D10Texture *d3d10Src  = static_cast<D3D10Texture*>(texSrc);
+
+    d3d->CopyResource(d3d10Dest->texture, d3d10Src->texture);
+}

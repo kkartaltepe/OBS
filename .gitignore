@@ -6,7 +6,17 @@ publish/
 Release/
 Debug/
 x64/
+installer/32bit
+installer/upload
+installer/64bit
+ipch/
 
+*.sdf
+*.opensdf
+*.xml
+*.ipch
+*.css
+*.xslt
 *.aps
 *.suo
 *.ncb
@@ -23,5 +33,8 @@ x64/
 _UpgradeReport_Files/*
 UpgradeLog*.htm
 UpgradeLog*.XML
+
+!x264/libs/64bit/*.dll
+!x264/libs/32bit/*.dll
 *.opensdf
 *.sdf

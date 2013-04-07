@@ -22,10 +22,12 @@
 #define WINVER         0x0600
 #define _WIN32_WINDOWS 0x0600
 #define _WIN32_WINNT   0x0600
+#define NTDDI_VERSION  NTDDI_VISTASP1
 #define WIN32_LEAN_AND_MEAN
 #define ISOLATION_AWARE_ENABLED 1
 #include <windows.h>
 #include <commctrl.h>
+#include <shellapi.h>
 #include <commdlg.h>
 #include <math.h>
 
@@ -45,9 +47,7 @@
 #define USE_DXGI1_2 1
 
 #ifdef USE_DXGI1_2
-#include "../extras/sal.h"
-#include "../extras/no_sal2.h"
-#include "../extras/dxgi1_2.h"
+#include <dxgi1_2.h>
 #endif
 
 
@@ -68,12 +68,14 @@ extern HINSTANCE    hinstMain;
 extern ConfigFile   *GlobalConfig;
 extern ConfigFile   *AppConfig;
 extern OBS          *App;
+extern bool         bIsPortable;
+extern TCHAR        lpAppPath[MAX_PATH];
 extern TCHAR        lpAppDataPath[MAX_PATH];
 
-#define OBS_VERSION             0x000465
-#define OBS_VERSION_STRING_ANSI "Open Broadcaster Software v0.465a"
+#define OBS_VERSION             0x000472
+#define OBS_VERSION_STRING_ANSI "Open Broadcaster Software v0.48.012b (experimental test build)"
 #define OBS_VERSION_STRING      TEXT(OBS_VERSION_STRING_ANSI)
-//#define OBS_TEST_BUILD          1 //define this if releasing a test build to disable the auto updater
+#define OBS_TEST_BUILD          1 //define this if releasing a test build to disable the auto updater
 
 #ifdef _DEBUG
 #define OBS_DISABLE_AUTOUPDATE 1

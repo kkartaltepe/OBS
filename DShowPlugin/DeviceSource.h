@@ -36,15 +36,35 @@ enum DeviceColorType
     DeviceOutputType_HDYC,
 };
 
+struct SampleData {
+    //IMediaSample *sample;
+    LPBYTE lpData;
+    long dataLength;
+
+    bool bAudio;
+    LONGLONG timestamp;
+    volatile long refs;
+
+    inline SampleData() {refs = 1;}
+    inline ~SampleData() {Free(lpData);} //sample->Release();}
+
+    inline void AddRef() {++refs;}
+    inline void Release()
+    {
+        if(!InterlockedDecrement(&refs))
+            delete this;
+    }
+};
+
 struct ConvertData
 {
     LPBYTE input, output;
-    IMediaSample *sample;
+    SampleData *sample;
     HANDLE hSignalConvert, hSignalComplete;
-    bool bKillThread;
-    UINT width, height;
-    UINT pitch;
-    UINT startY, endY;
+    bool   bKillThread;
+    UINT   width, height;
+    UINT   pitch;
+    UINT   startY, endY;
 };
 
 class DeviceSource;
@@ -59,6 +79,8 @@ class DeviceAudioSource : public AudioSource
     List<BYTE> sampleBuffer;
     List<BYTE> outputBuffer;
 
+    int offset;
+
 protected:
     virtual bool GetNextBuffer(void **buffer, UINT *numFrames, QWORD *timestamp);
     virtual void ReleaseBuffer();
@@ -69,7 +91,11 @@ public:
     bool Initialize(DeviceSource *parent);
     ~DeviceAudioSource();
 
-    void ReceiveAudio(IMediaSample *sample);
+    void ReceiveAudio(LPBYTE lpData, UINT dataLength);
+
+    void FlushSamples();
+
+    inline void SetAudioOffset(int offset) {this->offset = offset; SetTimeOffset(offset);}
 };
 
 class DeviceSource : public ImageSource
@@ -82,6 +108,7 @@ class DeviceSource : public ImageSource
     IMediaControl           *control;
 
     IBaseFilter             *deviceFilter;
+    IBaseFilter             *audioDeviceFilter;
     CaptureFilter           *captureFilter;
     IBaseFilter             *audioFilter;
 
@@ -90,12 +117,16 @@ class DeviceSource : public ImageSource
     WAVEFORMATEX            audioFormat;
     DeviceAudioSource       *audioOut;
 
+    bool bRequestVolume;
+    float fNewVol;
+
     //---------------------------------
 
     DeviceColorType colorType;
 
     String          strDevice, strDeviceName, strDeviceID;
-    bool            bFlipVertical, bFlipHorizontal;
+    String          strAudioDevice, strAudioName, strAudioID;
+    bool            bFlipVertical, bFlipHorizontal, bDeviceHasAudio, bUsePointFiltering;
     UINT64          frameInterval;
     UINT            renderCX, renderCY;
     BOOL            bUseCustomResolution;
@@ -109,12 +140,18 @@ class DeviceSource : public ImageSource
     bool            bOutputAudioToDesktop;
 
     Texture         *texture;
-    HANDLE          hSampleMutex;
     XElement        *data;
     UINT            texturePitch;
     bool            bCapturing, bFiltersLoaded;
-    IMediaSample    *curSample;
     Shader          *colorConvertShader;
+
+    bool            bUseBuffering;
+    HANDLE          hStopSampleEvent;
+    HANDLE          hSampleMutex;
+    HANDLE          hSampleThread;
+    UINT            bufferTime;
+    SampleData      *latestVideoSample;
+    List<SampleData*> samples;
 
     UINT            opacity;
 
@@ -143,18 +180,25 @@ class DeviceSource : public ImageSource
     void FlushSamples()
     {
         OSEnterMutex(hSampleMutex);
-        SafeRelease(curSample);
+        for (UINT i=0; i<samples.Num(); i++)
+            delete samples[i];
+        samples.Clear();
+        SafeRelease(latestVideoSample);
         OSLeaveMutex(hSampleMutex);
     }
 
-    void ReceiveVideo(IMediaSample *sample);
-    void ReceiveAudio(IMediaSample *sample);
+    void SetAudioInfo(AM_MEDIA_TYPE *audioMediaType, GUID &expectedAudioType);
+
+    UINT GetSampleInsertIndex(LONGLONG timestamp);
+    void ReceiveMediaSample(IMediaSample *sample, bool bAudio);
 
     bool LoadFilters();
     void UnloadFilters();
 
     void Start();
     void Stop();
+
+    static DWORD WINAPI SampleThread(DeviceSource *source);
 
 public:
     bool Init(XElement *data);
@@ -168,7 +212,8 @@ public:
     void BeginScene();
     void EndScene();
 
-    virtual void SetInt(CTSTR lpName, int iVal);
+    void SetInt(CTSTR lpName, int iVal);
+    void SetFloat(CTSTR lpName, float fValue);
 
     Vect2 GetSize() const {return Vect2(float(renderCX), float(renderCY));}
 };

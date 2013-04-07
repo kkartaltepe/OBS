@@ -31,30 +31,19 @@ HANDLE textureMutexes[2] = {NULL, NULL};
 
 #define GRAPHICSCAPTURE_CLASSNAME TEXT("GraphicsCapture")
 
-inline  BOOL Is64BitWindows()
-{
-#if defined(_WIN64)
-    return TRUE;
-#elif defined(_WIN32)
-    BOOL f64 = FALSE;
-    return IsWow64Process(GetCurrentProcess(), &f64) && f64;
-#endif
-}
-
 
 struct WindowInfo
 {
     String strClass;
-    BOOL b64bit;
     BOOL bRequiresAdmin;
 };
 
 struct ConfigDialogData
 {
+    CTSTR lpName;
     XElement *data;
     List<WindowInfo> windowData;
     StringList adminWindows;
-    StringList opposingBitWindows;
 
     UINT cx, cy;
 
@@ -64,7 +53,6 @@ struct ConfigDialogData
             windowData[i].strClass.Clear();
         windowData.Clear();
         adminWindows.Clear();
-        opposingBitWindows.Clear();
     }
 
     inline ~ConfigDialogData()
@@ -74,15 +62,12 @@ struct ConfigDialogData
     }
 };
 
+typedef HANDLE (WINAPI *OPPROC) (DWORD, BOOL, DWORD);
+
 void RefreshWindowList(HWND hwndCombobox, ConfigDialogData &configData)
 {
     SendMessage(hwndCombobox, CB_RESETCONTENT, 0, 0);
     configData.ClearData();
-
-    BOOL bWindows64bit = Is64BitWindows();
-
-    BOOL bCurrentProcessIsWow64 = FALSE;
-    IsWow64Process(GetCurrentProcess(), &bCurrentProcessIsWow64);
 
     HWND hwndCurrent = GetWindow(GetDesktopWindow(), GW_CHILD);
     do
@@ -97,13 +82,11 @@ void RefreshWindowList(HWND hwndCombobox, ConfigDialogData &configData)
             DWORD exStyles = (DWORD)GetWindowLongPtr(hwndCurrent, GWL_EXSTYLE);
             DWORD styles = (DWORD)GetWindowLongPtr(hwndCurrent, GWL_STYLE);
 
-            if( (exStyles & WS_EX_TOOLWINDOW) == 0 && (styles & WS_CHILD) == 0 /*&& hwndParent == NULL*/)
+            if((exStyles & WS_EX_TOOLWINDOW) == 0 && (styles & WS_CHILD) == 0 /*&& hwndParent == NULL*/)
             {
                 String strWindowName;
                 strWindowName.SetLength(GetWindowTextLength(hwndCurrent));
                 GetWindowText(hwndCurrent, strWindowName, strWindowName.Length()+1);
-
-                bool b64bit = false;
 
                 //-------
 
@@ -115,12 +98,15 @@ void RefreshWindowList(HWND hwndCombobox, ConfigDialogData &configData)
                 TCHAR fileName[MAX_PATH+1];
                 scpy(fileName, TEXT("unknown"));
 
-                HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, processID);
+                char pOPStr[12];
+                mcpy(pOPStr, "NpflUvhel{x", 12);
+                for (int i=0; i<11; i++) pOPStr[i] ^= i^1;
+
+                OPPROC pOpenProcess = (OPPROC)GetProcAddress(GetModuleHandle(TEXT("KERNEL32")), pOPStr);
+
+                HANDLE hProcess = (*pOpenProcess)(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, processID);
                 if(hProcess)
                 {
-                    BOOL bTargetProcessIsWow64 = FALSE;
-                    IsWow64Process(hProcess, &bTargetProcessIsWow64);
-
                     DWORD dwSize = MAX_PATH;
                     QueryFullProcessImageName(hProcess, 0, fileName, &dwSize);
 
@@ -129,14 +115,8 @@ void RefreshWindowList(HWND hwndCombobox, ConfigDialogData &configData)
 
                     CloseHandle(hProcess);
 
-                    //todo: remove later
-                    if(bCurrentProcessIsWow64 != bTargetProcessIsWow64)
-                    {
-                        configData.opposingBitWindows << strWindowName;
-                        continue;
-                    }
-
-                    BOOL bFoundModule = FALSE;
+                    //note: this doesn't actually work cross-bit
+                    /*BOOL bFoundModule = FALSE;
                     for(UINT i=0; i<moduleList.Num(); i++)
                     {
                         CTSTR moduleName = moduleList[i];
@@ -153,23 +133,14 @@ void RefreshWindowList(HWND hwndCombobox, ConfigDialogData &configData)
                     }
 
                     if (!bFoundModule)
-                        continue;
-
-                    b64bit = (bWindows64bit && !bTargetProcessIsWow64);
+                        continue;*/
                 }
                 else
                 {
                     hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processID);
                     if(hProcess)
                     {
-                        BOOL bTargetProcessIsWow64 = FALSE;
-                        IsWow64Process(hProcess, &bTargetProcessIsWow64);
-
-                        if(bCurrentProcessIsWow64 != bTargetProcessIsWow64)
-                            configData.opposingBitWindows << strWindowName;
-
                         configData.adminWindows << strWindowName;
-
                         CloseHandle(hProcess);
                     }
 
@@ -183,7 +154,6 @@ void RefreshWindowList(HWND hwndCombobox, ConfigDialogData &configData)
 
                 String strText;
                 strText << TEXT("[") << GetPathFileName(strFileName);
-                strText << (b64bit ? TEXT("*64") : TEXT("*32"));
                 strText << TEXT("]: ") << strWindowName;
 
                 int id = (int)SendMessage(hwndCombobox, CB_ADDSTRING, 0, (LPARAM)strText.Array());
@@ -196,11 +166,23 @@ void RefreshWindowList(HWND hwndCombobox, ConfigDialogData &configData)
 
                 WindowInfo &info    = *configData.windowData.CreateNew();
                 info.strClass       = strClassName;
-                info.b64bit         = b64bit;
                 info.bRequiresAdmin = false; //todo: add later
             }
         }
     } while (hwndCurrent = GetNextWindow(hwndCurrent, GW_HWNDNEXT));
+}
+
+int SetSliderText(HWND hwndParent, int controlSlider, int controlText)
+{
+    HWND hwndSlider = GetDlgItem(hwndParent, controlSlider);
+    HWND hwndText   = GetDlgItem(hwndParent, controlText);
+
+    int sliderVal = (int)SendMessage(hwndSlider, TBM_GETPOS, 0, 0);
+    float floatVal = float(sliderVal)*0.01f;
+
+    SetWindowText(hwndText, FormattedString(TEXT("%.02f"), floatVal));
+
+    return sliderVal;
 }
 
 INT_PTR CALLBACK ConfigureDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -230,8 +212,48 @@ INT_PTR CALLBACK ConfigureDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPA
                 EnableWindow(GetDlgItem(hwnd, IDC_INVERTMOUSEONCLICK), bCaptureMouse);
                 EnableWindow(GetDlgItem(hwnd, IDC_IGNOREASPECT), bStretchImage);
 
+                //------------------------------------------
+
+                bool bUseHotkey = data->GetInt(TEXT("useHotkey"), 0) != 0;
+
+                EnableWindow(GetDlgItem(hwnd, IDC_APPLIST),     !bUseHotkey);
+                EnableWindow(GetDlgItem(hwnd, IDC_REFRESH),     !bUseHotkey);
+                EnableWindow(GetDlgItem(hwnd, IDC_HOTKEY),       bUseHotkey);
+
+                DWORD hotkey = data->GetInt(TEXT("hotkey"), VK_F12);
+                SendMessage(GetDlgItem(hwnd, IDC_HOTKEY), HKM_SETHOTKEY, hotkey, 0);
+
+                SendMessage(GetDlgItem(hwnd, IDC_SELECTAPP), BM_SETCHECK, bUseHotkey ? BST_UNCHECKED : BST_CHECKED, 0);
+                SendMessage(GetDlgItem(hwnd, IDC_USEHOTKEY), BM_SETCHECK, bUseHotkey ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                //------------------------------------------
+
+                int gammaVal = data->GetInt(TEXT("gamma"), 100);
+
+                HWND hwndTemp = GetDlgItem(hwnd, IDC_GAMMA);
+                SendMessage(hwndTemp, TBM_CLEARTICS, FALSE, 0);
+                SendMessage(hwndTemp, TBM_SETRANGE, FALSE, MAKELPARAM(50, 175));
+                SendMessage(hwndTemp, TBM_SETTIC, 0, 100);
+                SendMessage(hwndTemp, TBM_SETPOS, TRUE, gammaVal);
+
+                SetSliderText(hwnd, IDC_GAMMA, IDC_GAMMAVAL);
+
                 return TRUE;
             }
+
+        case WM_HSCROLL:
+            {
+                if(GetDlgCtrlID((HWND)lParam) == IDC_GAMMA)
+                {
+                    int gamma = SetSliderText(hwnd, IDC_GAMMA, IDC_GAMMAVAL);
+
+                    ConfigDialogData *info = (ConfigDialogData*)GetWindowLongPtr(hwnd, DWLP_USER);
+                    ImageSource *source = API->GetSceneImageSource(info->lpName);
+                    if(source)
+                        source->SetInt(TEXT("gamma"), gamma);
+                }
+            }
+            break;
 
         case WM_COMMAND:
             switch(LOWORD(wParam))
@@ -240,6 +262,18 @@ INT_PTR CALLBACK ConfigureDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPA
                     {
                         BOOL bCaptureMouse = SendMessage(GetDlgItem(hwnd, IDC_CAPTUREMOUSE), BM_GETCHECK, 0, 0) == BST_CHECKED;
                         EnableWindow(GetDlgItem(hwnd, IDC_INVERTMOUSEONCLICK), bCaptureMouse);
+                    }
+                    break;
+
+                case IDC_SELECTAPP:
+                case IDC_USEHOTKEY:
+                    if (HIWORD(wParam) == BN_CLICKED)
+                    {
+                        bool bUseHotkey = LOWORD(wParam) == IDC_USEHOTKEY;
+
+                        EnableWindow(GetDlgItem(hwnd, IDC_APPLIST),     !bUseHotkey);
+                        EnableWindow(GetDlgItem(hwnd, IDC_REFRESH),     !bUseHotkey);
+                        EnableWindow(GetDlgItem(hwnd, IDC_HOTKEY),       bUseHotkey);
                     }
                     break;
 
@@ -271,27 +305,12 @@ INT_PTR CALLBACK ConfigureDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPA
 
                         String strInfoText;
 
-                        //todo: remove later whem more stable
-                        strInfoText << TEXT("Note: This plugin is currently experimental and may not be fully stable yet.\r\nIf using multiple scenes, I highly recommend using this as a global source to prevent stability issues.\r\n\r\n");
-
                         if(info->adminWindows.Num())
                         {
                             strInfoText << Str("Sources.GameCaptureSource.RequiresAdmin") << TEXT("\r\n");
 
                             for(UINT i=0; i<info->adminWindows.Num(); i++)
                                 strInfoText << info->adminWindows[i] << TEXT("\r\n");
-                        }
-
-                        if(info->opposingBitWindows.Num())
-                        {
-#ifdef _WIN64
-                            strInfoText << Str("Sources.GameCaptureSource.Requires32bit") << TEXT("\r\n");
-#else
-                            strInfoText << Str("Sources.GameCaptureSource.Requires64bit") << TEXT("\r\n");
-#endif
-
-                            for(UINT i=0; i<info->opposingBitWindows.Num(); i++)
-                                strInfoText << TEXT("    * ") << info->opposingBitWindows[i] << TEXT("\r\n");
                         }
 
                         SetWindowText(GetDlgItem(hwnd, IDC_INFO), strInfoText);
@@ -317,10 +336,29 @@ INT_PTR CALLBACK ConfigureDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPA
                         data->SetInt(TEXT("ignoreAspect"), SendMessage(GetDlgItem(hwnd, IDC_IGNOREASPECT), BM_GETCHECK, 0, 0) == BST_CHECKED);
                         data->SetInt(TEXT("captureMouse"), SendMessage(GetDlgItem(hwnd, IDC_CAPTUREMOUSE), BM_GETCHECK, 0, 0) == BST_CHECKED);
                         data->SetInt(TEXT("invertMouse"),  SendMessage(GetDlgItem(hwnd, IDC_INVERTMOUSEONCLICK), BM_GETCHECK, 0, 0) == BST_CHECKED);
+
+                        data->SetInt(TEXT("useHotkey"),    SendMessage(GetDlgItem(hwnd, IDC_USEHOTKEY), BM_GETCHECK, 0, 0) == BST_CHECKED);
+                        data->SetInt(TEXT("hotkey"),       (DWORD)SendMessage(GetDlgItem(hwnd, IDC_HOTKEY), HKM_GETHOTKEY, 0, 0));
+
+                        data->SetInt(TEXT("gamma"),        (int)SendMessage(GetDlgItem(hwnd, IDC_GAMMA), TBM_GETPOS, 0, 0));
+
+                        EndDialog(hwnd, LOWORD(wParam));
                     }
+                    break;
 
                 case IDCANCEL:
-                    EndDialog(hwnd, LOWORD(wParam));
+                    {
+                        ConfigDialogData *info = (ConfigDialogData*)GetWindowLongPtr(hwnd, DWLP_USER);
+                        ImageSource *source = API->GetSceneImageSource(info->lpName);
+                        XElement *data = info->data;
+
+                        if(source)
+                        {
+                            source->SetInt(TEXT("gamma"), data->GetInt(TEXT("gamma"), 100));
+                        }
+
+                        EndDialog(hwnd, LOWORD(wParam));
+                    }
             }
             break;
 
@@ -344,6 +382,7 @@ bool STDCALL ConfigureGraphicsCaptureSource(XElement *element, bool bCreating)
 
     ConfigDialogData *configData = new ConfigDialogData;
     configData->data = data;
+    configData->lpName = element->GetName();
 
     if(DialogBoxParam(hinstMain, MAKEINTRESOURCE(IDD_CONFIG), API->GetMainWindow(), ConfigureDialogProc, (LPARAM)configData) == IDOK)
     {
@@ -374,6 +413,8 @@ ImageSource* STDCALL CreateGraphicsCaptureSource(XElement *data)
 
 bool LoadPlugin()
 {
+    InitHotkeyExControl(hinstMain);
+
     textureMutexes[0] = CreateMutex(NULL, NULL, TEXTURE_MUTEX1);
     if(!textureMutexes[0])
     {

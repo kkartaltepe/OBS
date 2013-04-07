@@ -19,6 +19,7 @@
 
 #include "Main.h"
 
+#include <shellapi.h>
 #include <shlobj.h>
 #include <dwmapi.h>
 
@@ -36,6 +37,8 @@ HINSTANCE   hinstMain       = NULL;
 ConfigFile  *GlobalConfig   = NULL;
 ConfigFile  *AppConfig      = NULL;
 OBS         *App            = NULL;
+bool        bIsPortable     = false;
+TCHAR       lpAppPath[MAX_PATH];
 TCHAR       lpAppDataPath[MAX_PATH];
 
 //----------------------------
@@ -102,6 +105,12 @@ void LogSystemStats()
 
     Log(TEXT("stepping id: %u, model %u, family %u, type %u, extmodel %u, extfamily %u, HTT %u, logical cores %u, total cores %u"), cpuSteppingID, cpuModel, cpuFamily, cpuType, cpuExtModel, cpuExtFamily, cpuHTT, OSGetLogicalCores(), OSGetTotalCores());
 
+    for(UINT i=0; i<App->NumMonitors(); i++)
+    {
+        const MonitorInfo &info = App->GetMonitor(i);
+        Log(TEXT("monitor %u: pos={%d, %d}, size={%d, %d}"), i+1, info.rect.left, info.rect.top, info.rect.right-info.rect.left, info.rect.bottom-info.rect.top);
+    }
+
     OSVERSIONINFO osvi;
     osvi.dwOSVersionInfoSize = sizeof(osvi);
     GetVersionEx(&osvi);
@@ -114,33 +123,32 @@ void LogSystemStats()
     LogVideoCardStats();
 }
 
-void ConvertPre445aConfig(CTSTR lpConfig)
+void InvertPre47Scenes()
 {
-    ConfigFile config;
-    if(config.Open(lpConfig))
+    String strScenesPath;
+    strScenesPath << lpAppDataPath << TEXT("\\scenes.xconfig");
+
+    XConfig scenesConfig;
+    if(scenesConfig.Open(strScenesPath))
     {
-        if(config.HasKey(TEXT("Publish"), TEXT("Server")))
+        XElement *scenes = scenesConfig.GetElement(TEXT("scenes"));
+        if(!scenes)
+            return;
+
+        UINT numScenes = scenes->NumElements();
+        for(UINT i=0; i<numScenes; i++)
         {
-            if(config.GetInt(TEXT("Publish"), TEXT("Service")) == 0)
-            {
-                String strServer    = config.GetString(TEXT("Publish"), TEXT("Server"));
-                String strChannel   = config.GetString(TEXT("Publish"), TEXT("Channel"));
+            XElement *scene = scenes->GetElementByID(i);
+            XElement *sources = scene->GetElement(TEXT("sources"));
+            if(!sources)
+                continue;
 
-                String strRTMPURL;
-                strRTMPURL << TEXT("rtmp://") << strServer << TEXT("/") << strChannel;
-
-                config.SetString(TEXT("Publish"), TEXT("URL"), strRTMPURL);
-            }
-            else
-            {
-                String strServer = config.GetString(TEXT("Publish"), TEXT("Server"));
-
-                config.SetString(TEXT("Publish"), TEXT("URL"), strServer);
-            }
+            sources->ReverseOrder();
         }
+
+        scenesConfig.Close(true);
     }
 }
-
 
 void SetupIni()
 {
@@ -151,27 +159,10 @@ void SetupIni()
     String strIni;
 
     //--------------------------------------------
-    // 0.445a fix (change server/channel to URL)
+    // 0.47a fix (invert sources in all scenes)
 
-    if(lastVersion < 0x445)
-    {
-        OSFindData ofd;
-
-        String strIniPath;
-        strIniPath << lpAppDataPath << TEXT("\\profiles\\");
-        HANDLE hFind = OSFindFirstFile(strIniPath + TEXT("*.ini"), ofd);
-        if(hFind)
-        {
-            do
-            {
-                if(ofd.bDirectory) continue;
-                ConvertPre445aConfig(strIniPath + ofd.fileName);
-
-            } while(OSFindNextFile(hFind, ofd));
-
-            OSFindClose(hFind);
-        }
-    }
+    if(lastVersion < 0x470)
+        InvertPre47Scenes();
 
     //--------------------------------------------
     // try to find and open the file, otherwise use the first one available
@@ -345,9 +336,26 @@ void SetWorkingFolder(void)
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
+    int numArgs;
+    LPWSTR *args = CommandLineToArgvW(GetCommandLineW(), &numArgs);
+
+    bool bDisableMutex = false;
+
+    for(int i=1; i<numArgs; i++)
+    {
+        if(scmpi(args[i], TEXT("-multi")) == 0)
+            bDisableMutex = true;
+        else if(scmpi(args[i], TEXT("-portable")) == 0)
+            bIsPortable = true;
+    }
+
+    LocalFree(args);
+
+    //------------------------------------------------------------
+
     //make sure only one instance of the application can be open at a time
     hOBSMutex = CreateMutex(NULL, TRUE, TEXT("OBSMutex"));
-    if(GetLastError() == ERROR_ALREADY_EXISTS)
+    if(!bDisableMutex && GetLastError() == ERROR_ALREADY_EXISTS)
     {
         hwndMain = FindWindow(OBS_WINDOW_CLASS, NULL);
         if(hwndMain)
@@ -361,6 +369,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     hinstMain = hInstance;
     
+    SetProcessDEPPolicy(PROCESS_DEP_ENABLE | PROCESS_DEP_DISABLE_ATL_THUNK_EMULATION);
     InitializeExceptionHandler();
 
     ULONG_PTR gdipToken;
@@ -377,11 +386,35 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         //always make sure we're running inside our app folder so that locale files and plugins work
         SetWorkingFolder();
 
+        //get current working dir
+        {
+            String strDirectory;
+            UINT dirSize = GetCurrentDirectory(0, 0);
+            strDirectory.SetLength(dirSize);
+            GetCurrentDirectory(dirSize, strDirectory.Array());
+
+            scpy(lpAppPath, strDirectory);
+        }
+
+        //if -portable isn't specified in command line check if there's a file named "obs_portable_mode" in current working dir, if so, obs goes into portable mode
+        if(!bIsPortable)
+        {
+            String strPMFileName = lpAppPath;
+            strPMFileName += TEXT("\\obs_portable_mode");
+            if(OSFileExists(strPMFileName))
+                bIsPortable = true;
+        }
+
         TSTR lpAllocator = NULL;
 
         {
-            SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT, lpAppDataPath);
-            scat_n(lpAppDataPath, TEXT("\\OBS"), 4);
+            if(bIsPortable)
+                scpy(lpAppDataPath, lpAppPath);
+            else
+            {
+                SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT, lpAppDataPath);
+                scat_n(lpAppDataPath, TEXT("\\OBS"), 4);
+            }
 
             if(!OSFileExists(lpAppDataPath) && !OSCreateDirectory(lpAppDataPath))
                 CrashError(TEXT("Couldn't create directory '%s'"), lpAppDataPath);
@@ -428,14 +461,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             LoadGlobalIni();
         }
 
+        //EnableMemoryTracking(true, 8961);
+
         //--------------------------------------------
 
-        String strDirectory;
-        UINT dirSize = GetCurrentDirectory(0, 0);
-        strDirectory.SetLength(dirSize);
-        GetCurrentDirectory(dirSize, strDirectory.Array());
-
-        GlobalConfig->SetString(TEXT("General"), TEXT("LastAppDirectory"), strDirectory.Array());
+        GlobalConfig->SetString(TEXT("General"), TEXT("LastAppDirectory"), lpAppPath);
 
         //--------------------------------------------
 

@@ -50,6 +50,15 @@ BOOL        bWindows8 = 0;
 
 HWND        hwndMainAppWindow = NULL;
 
+struct OSFileChangeData
+{
+    HANDLE hDirectory;
+    OVERLAPPED directoryChange;
+    TCHAR strDirectory[MAX_PATH];
+    TCHAR targetFileName[MAX_PATH];
+    BYTE changeBuffer[2048];
+};
+
 // Helper function to count set bits in the processor mask.
 DWORD CountSetBits(ULONG_PTR bitMask)
 {
@@ -400,6 +409,15 @@ void __cdecl OSDebugOut(const TCHAR *format, ...)
     OSDebugOutva(format, arglist);
 }
 
+CTSTR STDCALL OSGetErrorString(DWORD errorCode)
+{
+    static TCHAR errorString[2048];
+
+    FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, errorCode, 0, errorString, _countof(errorString)-1, NULL);
+    errorString[_countof(errorString)-1] = 0;
+
+    return errorString;
+}
 
 
 HANDLE STDCALL OSLoadLibrary(CTSTR lpFile)
@@ -456,7 +474,7 @@ void   STDCALL OSCloseMutex(HANDLE hMutex)
 }
 
 
-void   STDCALL OSSubMillisecondSleep(float fMSeconds)
+void   STDCALL OSSleepSubMillisecond(double fMSeconds)
 {
     int intPart;
 
@@ -469,20 +487,20 @@ void   STDCALL OSSubMillisecondSleep(float fMSeconds)
     fMSeconds -= intPart;
 
     LARGE_INTEGER t1, t2;
-    float fElapsedTime;
+    double fElapsedTime;
 
     QueryPerformanceCounter(&t1);
     for (;;)
     {
         QueryPerformanceCounter(&t2);
-        fElapsedTime = (t2.QuadPart - t1.QuadPart) * 1000.0f / clockFreq.QuadPart;
+        fElapsedTime = (t2.QuadPart - t1.QuadPart) * 1000.0 / clockFreq.QuadPart;
         if (fElapsedTime >= fMSeconds)
             return;
         Sleep(0);
     }
 }
 
-void   STDCALL OSMicrosecondSleep(QWORD qwMicroseconds)
+void   STDCALL OSSleepMicrosecond(QWORD qwMicroseconds)
 {
     unsigned int milliseconds = (unsigned int)(qwMicroseconds/1000);
     if(bWindows8 && milliseconds >= 2)
@@ -501,6 +519,30 @@ void   STDCALL OSMicrosecondSleep(QWORD qwMicroseconds)
         QueryPerformanceCounter(&t2);
         qwElapsedTime = (t2.QuadPart - t1.QuadPart) * 1000000 / clockFreq.QuadPart;
         if (qwElapsedTime >= qwMicroseconds)
+            return;
+        Sleep(0);
+    }
+}
+
+void   STDCALL OSSleep100NS(QWORD qw100NSTime)
+{
+    unsigned int milliseconds = (unsigned int)(qw100NSTime/10000);
+    if(bWindows8 && milliseconds >= 2)
+        milliseconds--;
+    if (milliseconds > 0)
+        Sleep(milliseconds);
+
+    qw100NSTime -= milliseconds*10000;
+
+    LARGE_INTEGER t1, t2;
+    QWORD qwElapsedTime;
+
+    QueryPerformanceCounter(&t1);
+    for (;;)
+    {
+        QueryPerformanceCounter(&t2);
+        qwElapsedTime = (t2.QuadPart - t1.QuadPart) * 10000000 / clockFreq.QuadPart;
+        if (qwElapsedTime >= qw100NSTime)
             return;
         Sleep(0);
     }
@@ -656,7 +698,7 @@ BOOL   STDCALL OSGetLoadedModuleList(HANDLE hProcess, StringList &ModuleList)
     HMODULE hMods[1024];
     DWORD count;
 
-    if (EnumProcessModules(hProcess, hMods, sizeof(hMods), &count))
+    if (EnumProcessModulesEx(hProcess, hMods, sizeof(hMods), &count, LIST_MODULES_ALL))
     {
         for (UINT i=0; i<(count / sizeof(HMODULE)); i++)
         {
@@ -686,7 +728,6 @@ BOOL   STDCALL OSGetLoadedModuleList(HANDLE hProcess, StringList &ModuleList)
 BOOL   STDCALL OSIncompatiblePatchesLoaded(String &errors)
 {
     BOOL ret = FALSE;
-    HMODULE dxGI;
     StringList moduleList;
 
     OSGetLoadedModuleList (GetCurrentProcess(), moduleList);
@@ -695,8 +736,9 @@ BOOL   STDCALL OSIncompatiblePatchesLoaded(String &errors)
 
     //current checks:
     //TeamSpeak 3 Overlay (hooks CreateDXGIFactory1 in such a way that it fails when called by OBS)
+    //Webroot Secureanywhere (hooks GDI calls and prevents OBS from screen capturing among other issues)
 
-    dxGI = GetModuleHandle(TEXT("DXGI.DLL"));
+    HMODULE dxGI = GetModuleHandle(TEXT("DXGI.DLL"));
     if (dxGI)
     {
         FARPROC createFactory = GetProcAddress(dxGI, "CreateDXGIFactory1");
@@ -717,6 +759,33 @@ BOOL   STDCALL OSIncompatiblePatchesLoaded(String &errors)
             }
         }
     }
+
+    //I'm just going to make this a warning that pops up when the app starts instead of actually preventing people from using the app
+    //People are complaining about this a bit too much and it's just like "whatever, do whatever you want"
+    /*HMODULE msIMG = GetModuleHandle(TEXT("MSIMG32"));
+    if (msIMG)
+    {
+        FARPROC alphaBlend = GetProcAddress(msIMG, "AlphaBlend");
+        if (alphaBlend)
+        {
+            if (!IsBadReadPtr(alphaBlend, 5))
+            {
+                BYTE opCode = *(BYTE *)alphaBlend;
+
+                if (opCode == 0xE9)
+                {
+                    if (moduleList.HasValue(TEXT("wrusr.dll")))
+                    {
+                        if (!errors.IsEmpty())
+                            errors << TEXT("\r\n\r\n");
+
+                        errors << TEXT("Webroot Secureanywhere appears to be active. This product is incompatible with OBS as the security features block OBS from accessing Windows GDI functions. Please add OBS.exe to the Secureanywhere exceptions list and restart OBS - see http://bit.ly/OBSWR if you need help."); 
+                        ret = TRUE;
+                    }
+                }
+            }
+        }
+    }*/
 
     return ret;
 }
@@ -744,5 +813,102 @@ BOOL   STDCALL OSIncompatibleModulesLoaded()
     return 0;
 }
 
+OSFileChangeData * STDCALL OSMonitorFileStart(String path)
+{
+    HANDLE hDirectory;
+    OSFileChangeData *data = (OSFileChangeData *)Allocate(sizeof(*data));
+
+    String strDirectory = path;
+    strDirectory.FindReplace(TEXT("\\"), TEXT("/"));
+    strDirectory = GetPathDirectory(strDirectory);
+    strDirectory.FindReplace(TEXT("/"), TEXT("\\"));
+    strDirectory << TEXT("\\");
+
+    scpy_n (data->strDirectory, strDirectory.Array(), _countof(data->strDirectory)-1);
+
+    hDirectory = CreateFile(data->strDirectory, FILE_LIST_DIRECTORY, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OVERLAPPED, NULL);
+    if(hDirectory != INVALID_HANDLE_VALUE)
+    {
+        DWORD test;
+        zero(&data->directoryChange, sizeof(data->directoryChange));
+
+        if(ReadDirectoryChangesW(hDirectory, data->changeBuffer, 2048, FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE, &test, &data->directoryChange, NULL))
+        {
+            scpy_n (data->targetFileName, path.Array(), _countof(data->targetFileName)-1);
+            data->hDirectory = hDirectory;
+            return data;
+        }
+        else
+        {
+            int err = GetLastError();
+            CloseHandle(hDirectory);
+            Log(TEXT("OSMonitorFileStart: Unable to monitor file '%s', error %d"), path.Array(), err);
+            return NULL;
+        }
+    }
+    else
+    {
+        int err = GetLastError();
+        Log(TEXT("OSMonitorFileStart: Unable to open directory '%s', error %d"), data->strDirectory, err);
+        return NULL;
+    }
+}
+
+BOOL STDCALL OSFileHasChanged (OSFileChangeData *data)
+{
+    BOOL hasModified = FALSE;
+
+    if(HasOverlappedIoCompleted(&data->directoryChange))
+    {
+        FILE_NOTIFY_INFORMATION *notify = (FILE_NOTIFY_INFORMATION*)data->changeBuffer;
+
+        for (;;)
+        {
+            if (notify->Action != FILE_ACTION_RENAMED_OLD_NAME && notify->Action != FILE_ACTION_REMOVED)
+            {
+                String strFileName;
+                strFileName.SetLength(notify->FileNameLength);
+                scpy_n(strFileName, notify->FileName, notify->FileNameLength/2);
+                strFileName.KillSpaces();
+
+                String strFileChanged;
+                strFileChanged << data->strDirectory << strFileName;             
+
+                if(strFileChanged.CompareI(data->targetFileName))
+                {
+                    hasModified = TRUE;
+                    break;
+                }
+            }
+
+            if (!notify->NextEntryOffset)
+                break;
+
+            notify = (FILE_NOTIFY_INFORMATION*)((BYTE *)notify + notify->NextEntryOffset);
+        }
+
+        DWORD test;
+        zero(&data->directoryChange, sizeof(data->directoryChange));
+        zero(data->changeBuffer, sizeof(data->changeBuffer));
+
+        if(ReadDirectoryChangesW(data->hDirectory, data->changeBuffer, 2048, FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE, &test, &data->directoryChange, NULL))
+        {
+        }
+        else
+        {
+            CloseHandle(data->hDirectory);
+            return hasModified;
+        }
+    }
+
+    return hasModified;
+}
+
+VOID STDCALL OSMonitorFileDestroy (OSFileChangeData *data)
+{
+    CancelIoEx(data->hDirectory, &data->directoryChange);
+    CloseHandle(data->hDirectory);
+    Free(data);
+}
 
 #endif

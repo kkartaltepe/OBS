@@ -35,7 +35,7 @@ bool DeviceAudioSource::GetNextBuffer(void **buffer, UINT *numFrames, QWORD *tim
 
         *buffer = outputBuffer.Array();
         *numFrames = sampleFrameCount;
-        *timestamp = API->GetAudioTime()+timeOffset;
+        *timestamp = API->GetAudioTime();
 
         return true;
     }
@@ -64,6 +64,15 @@ bool DeviceAudioSource::Initialize(DeviceSource *parent)
 
     //---------------------------------
 
+    bool  bFloat = false;
+    UINT  inputChannels;
+    UINT  inputSamplesPerSec;
+    UINT  inputBitsPerSample;
+    UINT  inputBlockSize;
+    DWORD inputChannelMask;
+
+    //---------------------------------
+
     if(device->audioFormat.wFormatTag == WAVE_FORMAT_EXTENSIBLE)
     {
         WAVEFORMATEXTENSIBLE *wfext = (WAVEFORMATEXTENSIBLE*)&device->audioFormat;
@@ -84,7 +93,7 @@ bool DeviceAudioSource::Initialize(DeviceSource *parent)
 
     outputBuffer.SetSize(sampleSegmentSize);
 
-    InitAudioData();
+    InitAudioData(bFloat, inputChannels, inputSamplesPerSec, inputBitsPerSample, inputBlockSize, inputChannelMask, false);
 
     return true;
 }
@@ -96,17 +105,20 @@ DeviceAudioSource::~DeviceAudioSource()
 }
 
 
-void DeviceAudioSource::ReceiveAudio(IMediaSample *sample)
+void DeviceAudioSource::ReceiveAudio(LPBYTE lpData, UINT dataLength)
 {
-    if(sample)
+    if(lpData)
     {
-        BYTE *pData;
-        if(SUCCEEDED(sample->GetPointer(&pData)))
-        {
-            OSEnterMutex(hAudioMutex);
-            sampleBuffer.AppendArray(pData, sample->GetActualDataLength());
-            OSLeaveMutex(hAudioMutex);
-        }
+        OSEnterMutex(hAudioMutex);
+        sampleBuffer.AppendArray(lpData, dataLength);
+        OSLeaveMutex(hAudioMutex);
     }
+}
+
+void DeviceAudioSource::FlushSamples()
+{
+    OSEnterMutex(hAudioMutex);
+    sampleBuffer.Clear();
+    OSLeaveMutex(hAudioMutex);
 }
 

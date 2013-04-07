@@ -31,6 +31,7 @@
 #define IDD_BUILDINGMP4                 137
 #define IDD_CONFIGURETEXTSOURCE         139
 #define IDD_ENDINGDELAY                 140
+#define IDI_ICON2                       142
 #define IDC_SETTINGSLIST                1006
 #define IDC_SUBDIALOG                   1007
 #define IDC_MODE                        1008
@@ -48,6 +49,8 @@
 #define IDC_BINDIP                      1014
 #define IDC_MAXBITRATE                  1015
 #define IDC_COLORPICKER                 1015
+#define IDC_DOWNSCALE2                  1015
+#define IDC_FILTER                      1015
 #define IDC_BUFFERSIZE                  1016
 #define IDC_AUDIOCODEC                  1017
 #define IDC_USECOLORKEY                 1017
@@ -65,12 +68,13 @@
 #define IDC_FPS_EDIT                    1031
 #define IDC_SIZEX                       1033
 #define IDC_SIZEY                       1034
+#define IDC_GAMMA                       1035
 #define IDC_USECUSTOM                   1036
+#define IDC_POINTFILTERING              1036
 #define IDC_USEMONITOR                  1037
 #define IDC_DISABLEAERO                 1038
 #define IDC_DISABLEMIC                  1040
 #define IDC_CHECK1                      1041
-#define IDC_USEI444                     1041
 #define IDC_RESETSIZE                   1041
 #define IDC_CAPTUREMOUSE                1041
 #define IDC_BUFFERSENDS                 1041
@@ -80,14 +84,23 @@
 #define IDC_FADEINONLY                  1041
 #define IDC_OPACITY                     1041
 #define IDC_USETEXTEXTENTS              1041
+#define IDC_CUSTOMBUFFER                1041
+#define IDC_NOTIFICATIONICON            1041
 #define IDC_SERVEREDIT                  1042
 #define IDC_USESENDBUFFER               1042
 #define IDC_FORCEMONO                   1042
 #define IDC_SCROLLSPEED                 1042
 #define IDC_OPACITY2                    1042
+#define IDC_DISABLEFADING               1042
 #define IDC_CHANNELNAME_STATIC          1043
 #define IDC_EXTENTWIDTH_EDIT            1043
 #define IDC_URL_STATIC                  1043
+#define IDC_FORCEMONO2                  1043
+#define IDC_USEMICTIMESTAMP             1043
+#define IDC_USEMICTIME                  1043
+#define IDC_USEMICQPC                   1043
+#define IDC_FADEINONLY3                 1043
+#define IDC_RANDOMIZE                   1043
 #define IDC_PLAYPATH_STATIC             1044
 #define IDC_SCROLLSPEED3                1044
 #define IDC_EXTENTHEIGHT_EDIT           1044
@@ -142,6 +155,7 @@
 #define IDC_TRANSITIONTIME_EDIT         1079
 #define IDC_MICBOOST                    1079
 #define IDC_TEXTSIZE                    1079
+#define IDC_AUDIOTIMEADJUST             1079
 #define IDC_AUTORECONNECT_TIMEOUT_STATIC 1080
 #define IDC_TEXTOPACITY_EDIT            1080
 #define IDC_PTTDELAY_EDIT               1080
@@ -158,6 +172,10 @@
 #define IDC_MICTIMEOFFSET               1083
 #define IDC_DELAY                       1084
 #define IDC_OUTLINETHICKNESS_EDIT       1084
+#define IDC_DESKTOPBOOST_EDIT           1084
+#define IDC_BACKGROUNDOPACITY_EDIT      1085
+#define IDC_MICBOOST2                   1085
+#define IDC_DESKTOPBOOST                1085
 #define IDC_USESYNCFIX                  1086
 #define IDC_CLEARPUSHTOTALK             1088
 #define IDC_CLEARMUTEMIC                1089
@@ -177,16 +195,24 @@
 #define IDC_USEMULTITHREADEDOPTIMIZATIONS 1099
 #define IDC_CAPTURELAYERED              1099
 #define IDC_USEOUTLINE                  1099
+#define IDC_LOWLATENCYMODE              1099
+#define IDC_MINIZENOTIFICATION          1099
 #define IDC_TIMER1                      1100
+#define IDC_CAPTURERAM                  1100
+#define IDC_COMPATIBILITYMODE           1100
 #define IDC_PROGRESS1                   1101
 #define IDC_DASHBOARDLINK_STATIC        1102
 #define IDC_DASHBOARDLINK               1103
 #define IDC_COLOR                       1104
-#define IDC_USEHIGHQUALITYRESAMPLING    1105
 #define IDC_OUTLINECOLOR                1105
+#define IDC_COLORKEY                    1105
+#define IDC_KEYCOLOR                    1105
 #define IDC_USETEXT                     1106
+#define IDC_USEVIDEOSYNC                1106
+#define IDC_SYNCTOVIDEOTIME             1106
 #define IDC_USEFILE                     1107
 #define IDC_FILE                        1108
+#define IDC_BACKGROUNDCOLOR             1109
 #define IDC_FONT                        1112
 #define IDC_TEXTSIZE_EDIT               1115
 #define IDC_SELECTFONT                  1116
@@ -195,6 +221,8 @@
 #define IDC_TEXTOPACITY2                1120
 #define IDC_OUTLINETHICKNESS            1120
 #define IDC_EXAMPLE                     1121
+#define IDC_TEXTOPACITY3                1121
+#define IDC_BACKGROUNDOPACITY           1121
 #define IDC_VERTICALSCRIPT              1122
 #define IDC_UNDERLINE                   1123
 #define IDC_ALIGN                       1124
@@ -209,6 +237,19 @@
 #define IDC_USECBR                      1133
 #define IDC_COMBO1                      1139
 #define IDC_DISABLECTSADJUST            1140
+#define IDC_USECFR                      1141
+#define IDC_PLAYBACKDEVICES             1142
+#define IDC_AUDIOTIMEADJUST_EDIT        1144
+#define IDC_LATENCYMETHOD               1145
+#define IDC_EDIT2                       1147
+#define IDC_LATENCYTUNE                 1147
+#define IDC_SETSTREAMSIZE               1148
+#define IDC_GAMMAVAL                    1151
+#define IDC_SCENEBUFFERTIME_EDIT        1152
+#define IDC_SCENEBUFFERTIME             1153
+#define IDC_OUTLINEOPACITY_EDIT         1154
+#define IDC_OUTLINEOPACITY              1155
+#define IDC_PUSHTOTALKHOTKEY2           1156
 #define IDA_SOURCE_MOVEUP               40018
 #define IDA_SOURCE_MOVEDOWN             40019
 #define IDA_SOURCE_MOVETOTOP            40020
@@ -232,14 +273,21 @@
 #define ID_SETTINGS_SETTINGS            40041
 #define ID_MAINMENU_MAINMENU40042       40042
 #define ID_HELP_VISITWEBSITE            40043
+#define ID_MAINMENU_MAINMENU40044       40044
+#define ID_ALWAYSONTOP                  40045
+#define ID_FULLSCREENMODE               40046
+#define ID_MAINMENU                     40047
+#define ID_MAINMENU_NOTHINGHERE         40048
+#define ID_MAINMENU_MAINMENU40048       40049
+#define ID_FILE_SAVE2                   40050
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        141
-#define _APS_NEXT_COMMAND_VALUE         40044
-#define _APS_NEXT_CONTROL_VALUE         1141
+#define _APS_NEXT_RESOURCE_VALUE        143
+#define _APS_NEXT_COMMAND_VALUE         40051
+#define _APS_NEXT_CONTROL_VALUE         1157
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

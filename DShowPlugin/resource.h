@@ -5,12 +5,17 @@
 #define IDD_CONFIG                      101
 #define IDC_DEVICELIST                  1001
 #define IDC_CONFIG                      1002
+#define IDC_AUDIOLIST                   1003
+#define IDC_CONFIGAUDIO                 1004
+#define IDC_CROSSBAR                    1007
 #define IDC_RESOLUTION                  1008
 #define IDC_FPS_EDIT                    1009
 #define IDC_FPS                         1010
 #define IDC_REFRESH                     1011
 #define IDC_FPS2                        1012
 #define IDC_USEPREFERREDOUTPUT          1012
+#define IDC_USEPREFERREDOUTPUT2         1013
+#define IDC_USEBUFFERING                1013
 #define IDC_FLIPIMAGE                   1014
 #define IDC_BUTTON1                     1015
 #define IDC_CUSTOM                      1015
@@ -41,6 +46,14 @@
 #define IDC_EDIT1                       1032
 #define IDC_TIMEOFFSET_EDIT             1032
 #define IDC_TIMEOFFSET                  1033
+#define IDC_CHECK1                      1034
+#define IDC_CUSTOM1                     1035
+#define IDC_VOLUME                      1035
+#define IDC_VOLMETER                    1036
+#define IDC_POINTFILTERING              1036
+#define IDC_DELAY_EDIT                  1037
+#define IDC_VIDEODELAY                  1038
+#define IDC_DELAY                       1038
 
 // Next default values for new objects
 // 
@@ -48,7 +61,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        107
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1034
+#define _APS_NEXT_CONTROL_VALUE         1037
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

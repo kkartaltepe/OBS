@@ -1,5 +1,6 @@
 services : {
   Twitch / Justin.tv : {
+    id : 1
     servers : {
       "Global Load Balancing Service"        : rtmp://live-3c.justin.tv/app
       "Asia: Singapore"                      : rtmp://live-sin-backup.justin.tv/app
@@ -19,24 +20,41 @@ services : {
       "US West: San Francisco, CA"           : rtmp://live.justin.tv/app
     }
   }
-  Own3D.tv : {
-    servers : {
-      US West           : rtmp://live.usw.own3d.tv/live
-      US East           : rtmp://live.use.own3d.tv/live
-      EU                : rtmp://live.eu.own3d.tv/live
-      US West (Partner) : rtmp://live.usw.pro.own3d.tv/live
-      US East (Partner) : rtmp://live.use.pro.own3d.tv/live
-      EU (Partner)      : rtmp://live.eu.pro.own3d.tv/live
-    }
-  }
   "Vaughn Live" : {
+    id : 3
     servers : {
       "US Chicago (Primary)"  : rtmp://live.vaughnlive.tv:443/live
     }
   }
   iNSTAGIB.tv : {
+    id : 4
     servers : {
       "US Chicago (Primary)"  : rtmp://live.instagib.tv:443/live
+    }
+  }
+  GoodGame.ru : {
+    id : 5
+    servers : {
+      "Primary"  :   rtmp://stream.goodgame.ru:1940/live
+    }
+  }
+  DailyMotion : {
+    id : 6
+    servers : {
+      "Primary" :    rtmp://publish.dailymotion.com/publish-dm
+    }
+  }
+  Hashd.tv : {
+    id : 7
+    servers : {
+      "US Dallas, TX"     : rtmp://edge-dal1.hashd.tv/live
+      "EU Amsterdam, NL"  : rtmp://edge-ams1.hashd.tv/live
+    }
+  }
+  TGamers.ru : {
+    id : 8
+    servers : {
+      "RU Moscow" : rtmp://stream3.tgamers.ru
     }
   }
 }

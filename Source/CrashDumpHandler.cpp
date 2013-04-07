@@ -57,7 +57,7 @@ LONG CALLBACK OBSExceptionHandler (PEXCEPTION_POINTERS exceptionInfo)
     SYMBOL_INFO         *symInfo;
     DWORD64             fnOffset;
     TCHAR               logPath[MAX_PATH];
-    TCHAR               dumpPath[MAX_PATH];
+
     OSVERSIONINFOEX     osInfo;
     SYSTEMTIME          timeInfo;
 
@@ -75,8 +75,6 @@ LONG CALLBACK OBSExceptionHandler (PEXCEPTION_POINTERS exceptionInfo)
     DWORD                       i;
     DWORD64                     InstructionPtr;
     DWORD                       imageType;
-
-    BOOL                        wantUpload = TRUE;
 
     TCHAR                       searchPath[MAX_PATH], *p;
 
@@ -193,7 +191,10 @@ LONG CALLBACK OBSExceptionHandler (PEXCEPTION_POINTERS exceptionInfo)
     fnEnumerateLoadedModules64 (hProcess, (PENUMLOADED_MODULES_CALLBACK64)EnumerateLoadedModulesProcInfo, (VOID *)&moduleInfo);
     slwr (moduleInfo.moduleName);
 
+    String strModuleInfo;
     String crashMessage;
+
+    fnEnumerateLoadedModules64(hProcess, (PENUMLOADED_MODULES_CALLBACK64)RecordAllLoadedModules, (VOID *)&strModuleInfo);
 
     crashMessage << 
         TEXT("OBS has encountered an unhandled exception and has terminated. If you are able to\r\n")
@@ -293,6 +294,7 @@ LONG CALLBACK OBSExceptionHandler (PEXCEPTION_POINTERS exceptionInfo)
     //generate a minidump if possible
     if (fnMiniDumpWriteDump)
     {
+        TCHAR     dumpPath[MAX_PATH];
         HANDLE    hFile;
 
         tsprintf_s (dumpPath, _countof(dumpPath)-1, TEXT("%s\\crashDumps\\OBSCrashDump%.4d-%.2d-%.2d_%d.dmp"), lpAppDataPath, timeInfo.wYear, timeInfo.wMonth, timeInfo.wDay, i);
@@ -320,14 +322,12 @@ LONG CALLBACK OBSExceptionHandler (PEXCEPTION_POINTERS exceptionInfo)
         crashDumpLog.WriteStr(TEXT("\r\nA minidump could not be created. Please check dbghelp.dll is present.\r\n"));
     }
 
-    String strModuleInfo;
     crashDumpLog.WriteStr("\r\nList of loaded modules:\r\n");
 #ifdef _WIN64
     crashDumpLog.WriteStr("Base Address                      Module\r\n");
 #else
     crashDumpLog.WriteStr("Base Address      Module\r\n");
 #endif
-    fnEnumerateLoadedModules64(hProcess, (PENUMLOADED_MODULES_CALLBACK64)RecordAllLoadedModules, (VOID *)&strModuleInfo);
     crashDumpLog.WriteStr(strModuleInfo);
 
     crashDumpLog.Close();

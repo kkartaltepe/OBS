@@ -103,16 +103,6 @@ Texture* D3D10Texture::CreateFromSharedHandle(unsigned int width, unsigned int h
 
     //------------------------------------------
 
-    IDXGIKeyedMutex *km;
-    if(FAILED(err = texVal->QueryInterface(__uuidof(IDXGIKeyedMutex), (void**)&km)))
-    {
-        //SafeRelease(texVal);
-        AppWarning(TEXT("D3D10Texture::CreateFromSharedHandle: could not query keyed mutex interface, result = 0x%08lX"), err);
-        //return NULL;
-    }
-
-    //------------------------------------------
-
     DXGI_FORMAT format = convertFormat[(UINT)colorFormat];
 
     D3D10_SHADER_RESOURCE_VIEW_DESC resourceDesc;
@@ -135,7 +125,6 @@ Texture* D3D10Texture::CreateFromSharedHandle(unsigned int width, unsigned int h
     newTex->format = colorFormat;
     newTex->resource = resource;
     newTex->texture = texVal;
-    newTex->keyedMutex = km;
     newTex->bDynamic = false;
     newTex->width = width;
     newTex->height = height;
@@ -403,7 +392,6 @@ Texture* D3D10Texture::CreateGDITexture(unsigned int width, unsigned int height)
     td.Usage            = D3D10_USAGE_DEFAULT;
     td.MiscFlags        = D3D10_RESOURCE_MISC_GDI_COMPATIBLE;
 
-    LPBYTE lpData = NULL;
     D3D10_SUBRESOURCE_DATA srd;
     zero(&srd, sizeof(srd));
 
@@ -446,7 +434,6 @@ Texture* D3D10Texture::CreateGDITexture(unsigned int width, unsigned int height)
 
 D3D10Texture::~D3D10Texture()
 {
-    SafeRelease(keyedMutex);
     SafeRelease(renderTarget);
     SafeRelease(resource);
     SafeRelease(texture);
@@ -521,7 +508,7 @@ void CopyPackedRGB(BYTE *lpDest, BYTE *lpSource, UINT nPixels)
 
     DWORD *lpDWDest = (DWORD*)lpDest;
     DWORD *lpDWSrc  = (DWORD*)lpSource;
-    DWORD *lpEnd    = (DWORD*)(lpSource+alignedBytes);
+
     while(nDWords)
     {
         switch(curComponent)
@@ -569,7 +556,7 @@ void D3D10Texture::SetImage(void *lpData, GSImageFormat imageFormat, UINT pitch)
     }
 
     bool bMatchingFormat = false;
-    UINT pixelBytes = 0;
+    UINT pixelBytes = 0;    //What is this needed for?
 
     switch(format)
     {
@@ -617,8 +604,6 @@ void D3D10Texture::SetImage(void *lpData, GSImageFormat imageFormat, UINT pitch)
     //-------------------------------------------------------------------------
     else
     {
-        UINT rowWidth = width*pixelBytes;
-
         if(pitch == map.RowPitch)
         {
             if(App->SSE2Available())
@@ -677,18 +662,3 @@ void D3D10Texture::Unmap()
 {
     texture->Unmap(0);
 }
-
-DWORD D3D10Texture::AcquireSync(UINT id, DWORD dwMS)
-{
-    if(keyedMutex)
-        return (DWORD)keyedMutex->AcquireSync((UINT64)id, dwMS);
-
-    return WAIT_FAILED;
-}
-
-void D3D10Texture::ReleaseSync(UINT id)
-{
-    if(keyedMutex)
-        keyedMutex->ReleaseSync((UINT64)id);
-}
-

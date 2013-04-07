@@ -30,15 +30,21 @@ void SceneItem::SetName(CTSTR lpNewName)
     element->SetName(lpNewName);
 }
 
+void SceneItem::SetRender(bool render)
+{
+    element->SetInt(TEXT("render"), (int)((render)?1:0));
+    bRender = render;
+}
+
 void SceneItem::Update()
 {
     pos = Vect2(element->GetFloat(TEXT("x")), element->GetFloat(TEXT("y")));
-    //size = Vect2(element->GetFloat(TEXT("cx"), 100), element->GetFloat(TEXT("cy"), 100));
+    size = Vect2(element->GetFloat(TEXT("cx"), 100.0f), element->GetFloat(TEXT("cy"), 100.0f));
 
     //just reset the size if configuration changed, that way the user doesn't have to screw with the size
-    if(source) size = source->GetSize();
-    element->SetInt(TEXT("cx"), int(size.x));
-    element->SetInt(TEXT("cy"), int(size.y));
+    //if(source) size = source->GetSize();
+    /*element->SetInt(TEXT("cx"), int(size.x));
+    element->SetInt(TEXT("cy"), int(size.y));*/
 }
 
 void SceneItem::MoveUp()
@@ -123,10 +129,21 @@ Scene::~Scene()
 
 SceneItem* Scene::AddImageSource(XElement *sourceElement)
 {
+    return InsertImageSource(sceneItems.Num(), sourceElement);
+}
+
+SceneItem* Scene::InsertImageSource(UINT pos, XElement *sourceElement)
+{
     if(GetSceneItem(sourceElement->GetName()) != NULL)
     {
         AppWarning(TEXT("Scene source '%s' already in scene.  actually, no one should get this error.  if you do send it to jim immidiately."), sourceElement->GetName());
         return NULL;
+    }
+
+    if(pos > sceneItems.Num())
+    {
+        AppWarning(TEXT("Scene::InsertImageSource: pos >= sceneItems.Num()"));
+        pos = sceneItems.Num();
     }
 
     CTSTR lpClass = sourceElement->GetString(TEXT("class"));
@@ -145,6 +162,7 @@ SceneItem* Scene::AddImageSource(XElement *sourceElement)
     float y  = sourceElement->GetFloat(TEXT("y"));
     float cx = sourceElement->GetFloat(TEXT("cx"), 100);
     float cy = sourceElement->GetFloat(TEXT("cy"), 100);
+    bool render = sourceElement->GetInt(TEXT("render"), 1) > 0;
 
     SceneItem *item = new SceneItem;
     item->element = sourceElement;
@@ -152,10 +170,11 @@ SceneItem* Scene::AddImageSource(XElement *sourceElement)
     item->source = source;
     item->pos = Vect2(x, y);
     item->size = Vect2(cx, cy);
+    item->SetRender(render);
 
     API->EnterSceneMutex();
     if(bSceneStarted) source->BeginScene();
-    sceneItems << item;
+    sceneItems.Insert(pos, item);
     API->LeaveSceneMutex();
 
     if(!source)
@@ -189,7 +208,7 @@ void Scene::Preprocess()
     for(UINT i=0; i<sceneItems.Num(); i++)
     {
         SceneItem *item = sceneItems[i];
-        if(item->source)
+        if(item->source && item->bRender)
             item->source->Preprocess();
     }
 }
@@ -208,10 +227,10 @@ void Scene::Render()
 {
     GS->ClearColorBuffer();
 
-    for(UINT i=0; i<sceneItems.Num(); i++)
+    for(int i=sceneItems.Num()-1; i>=0; i--)
     {
         SceneItem *item = sceneItems[i];
-        if(item->source)
+        if(item->source && item->bRender)
             item->source->Render(item->pos, item->size);
     }
 }
@@ -223,14 +242,9 @@ void Scene::RenderSelections()
         SceneItem *item = sceneItems[i];
         if(item->bSelected)
         {
-            Vect2 pos  = item->GetPos()+1.0f;
-            Vect2 size = item->GetSize()-2.0f;
-
-            Vect2 outputSize = API->GetBaseSize();
-            Vect2 frameSize  = API->GetRenderFrameSize();
-            float sizeAdjust = outputSize.x/frameSize.x;
-
-            Vect2 selectBoxSize = Vect2(10.0f, 10.0f)*sizeAdjust;
+            Vect2 pos  = API->MapFrameToWindowPos(item->GetPos())+1.0f;
+            Vect2 size = API->MapFrameToWindowSize(item->GetSize())-2.0f;
+            Vect2 selectBoxSize = Vect2(10.0f, 10.0f);
 
             DrawBox(pos, selectBoxSize);
             DrawBox((pos+size)-selectBoxSize, selectBoxSize);

@@ -21,6 +21,9 @@
 
 DWORD STDCALL PackPlanarThread(ConvertData *data);
 
+#define NEAR_SILENT  3000
+#define NEAR_SILENTf 3000.0
+
 
 bool DeviceSource::Init(XElement *data)
 {
@@ -74,6 +77,8 @@ DeviceSource::~DeviceSource()
     SafeRelease(capture);
     SafeRelease(graph);
 
+    FlushSamples();
+
     if(hConvertThreads)
         Free(hConvertThreads);
 
@@ -123,6 +128,38 @@ const float yuvMat[16] = { 0.257f,  0.504f,  0.098f, 0.0625f,
                            0.439f, -0.368f, -0.071f, 0.50f,
                            0.0f,    0.0f,    0.0f,   1.0f};
 
+void DeviceSource::SetAudioInfo(AM_MEDIA_TYPE *audioMediaType, GUID &expectedAudioType)
+{
+    expectedAudioType = audioMediaType->subtype;
+
+    if(audioMediaType->formattype == FORMAT_WaveFormatEx)
+    {
+        WAVEFORMATEX *pFormat = reinterpret_cast<WAVEFORMATEX*>(audioMediaType->pbFormat);
+        mcpy(&audioFormat, pFormat, sizeof(audioFormat));
+
+        Log(TEXT("    device audio info - bits per sample: %u, channels: %u, samples per sec: %u, block size: %u"),
+            audioFormat.wBitsPerSample, audioFormat.nChannels, audioFormat.nSamplesPerSec, audioFormat.nBlockAlign);
+
+        //avoid local resampling if possible
+        /*if(pFormat->nSamplesPerSec != 44100)
+        {
+            pFormat->nSamplesPerSec = 44100;
+            if(SUCCEEDED(audioConfig->SetFormat(audioMediaType)))
+            {
+                Log(TEXT("    also successfully set samples per sec to 44.1k"));
+                audioFormat.nSamplesPerSec = 44100;
+            }
+        }*/
+    }
+    else
+    {
+        AppWarning(TEXT("DShowPlugin: Audio format was not a normal wave format"));
+        soundOutputType = 0;
+    }
+
+    DeleteMediaType(audioMediaType);
+}
+
 bool DeviceSource::LoadFilters()
 {
     if(bCapturing || bFiltersLoaded)
@@ -143,15 +180,26 @@ bool DeviceSource::LoadFilters()
     //------------------------------------------------
     // basic initialization vars
 
+    bool bForceCustomAudio = data->GetInt(TEXT("forceCustomAudioDevice")) != 0;
+
     bUseCustomResolution = data->GetInt(TEXT("customResolution"));
     strDevice = data->GetString(TEXT("device"));
     strDeviceName = data->GetString(TEXT("deviceName"));
     strDeviceID = data->GetString(TEXT("deviceID"));
+    strAudioDevice = data->GetString(TEXT("audioDevice"));
+    strAudioName = data->GetString(TEXT("audioDeviceName"));
+    strAudioID = data->GetString(TEXT("audioDeviceID"));
 
     bFlipVertical = data->GetInt(TEXT("flipImage")) != 0;
     bFlipHorizontal = data->GetInt(TEXT("flipImageHorizontal")) != 0;
+    bUsePointFiltering = data->GetInt(TEXT("usePointFiltering")) != 0;
 
     opacity = data->GetInt(TEXT("opacity"), 100);
+
+    float volume = data->GetFloat(TEXT("volume"), 1.0f);
+
+    bUseBuffering = data->GetInt(TEXT("useBuffering")) != 0;
+    bufferTime = data->GetInt(TEXT("bufferTime"))*10000;
 
     //------------------------------------------------
     // chrom key stuff
@@ -173,14 +221,7 @@ bool DeviceSource::LoadFilters()
     // get the device filter and pins
 
     if(strDeviceName.IsValid())
-    {
-        deviceFilter = GetDeviceByValue(L"FriendlyName", strDeviceName, L"DevicePath", strDeviceID);
-        if(!deviceFilter)
-        {
-            AppWarning(TEXT("DShowPlugin: Invalid device: name '%s', path '%s'"), strDeviceName.Array(), strDeviceID.Array());
-            goto cleanFinish;
-        }
-    }
+        deviceFilter = GetDeviceByValue(CLSID_VideoInputDeviceCategory, L"FriendlyName", strDeviceName, L"DevicePath", strDeviceID);
     else
     {
         if(!strDevice.IsValid())
@@ -189,15 +230,16 @@ bool DeviceSource::LoadFilters()
             goto cleanFinish;
         }
 
-        deviceFilter = GetDeviceByValue(L"FriendlyName", strDevice);
-        if(!deviceFilter)
-        {
-            AppWarning(TEXT("DShowPlugin: Could not create device filter"));
-            goto cleanFinish;
-        }
+        deviceFilter = GetDeviceByValue(CLSID_VideoInputDeviceCategory, L"FriendlyName", strDevice);
+    }
+    
+    if(!deviceFilter)
+    {
+        AppWarning(TEXT("DShowPlugin: Could not create device filter"));
+        goto cleanFinish;
     }
 
-    devicePin = GetOutputPin(deviceFilter);
+    devicePin = GetOutputPin(deviceFilter, &MEDIATYPE_Video);
     if(!devicePin)
     {
         AppWarning(TEXT("DShowPlugin: Could not get device video pin"));
@@ -208,13 +250,41 @@ bool DeviceSource::LoadFilters()
 
     if(soundOutputType != 0)
     {
-        err = capture->FindPin(deviceFilter, PINDIR_OUTPUT, &PIN_CATEGORY_CAPTURE, &MEDIATYPE_Audio, FALSE, 0, &audioPin);
+        if(!bForceCustomAudio)
+        {
+            err = capture->FindPin(deviceFilter, PINDIR_OUTPUT, &PIN_CATEGORY_CAPTURE, &MEDIATYPE_Audio, FALSE, 0, &audioPin);
+            bDeviceHasAudio = SUCCEEDED(err);
+        }
+        else
+            bDeviceHasAudio = false;
+
+        if(!bDeviceHasAudio)
+        {
+            if(strDeviceName.IsValid())
+            {
+                audioDeviceFilter = GetDeviceByValue(CLSID_AudioInputDeviceCategory, L"FriendlyName", strAudioName, L"DevicePath", strAudioID);
+                if(!audioDeviceFilter)
+                    AppWarning(TEXT("DShowPlugin: Invalid audio device: name '%s', path '%s'"), strAudioName.Array(), strAudioID.Array());
+            }
+            else if(strAudioDevice.IsValid())
+            {
+                audioDeviceFilter = GetDeviceByValue(CLSID_AudioInputDeviceCategory, L"FriendlyName", strAudioDevice);
+                if(!audioDeviceFilter)
+                    AppWarning(TEXT("DShowPlugin: Could not create audio device filter"));
+            }
+
+            if(audioDeviceFilter)
+                err = capture->FindPin(audioDeviceFilter, PINDIR_OUTPUT, &PIN_CATEGORY_CAPTURE, &MEDIATYPE_Audio, FALSE, 0, &audioPin);
+        }
+
         if(FAILED(err))
         {
             Log(TEXT("DShowPlugin: No audio pin, result = %lX"), err);
             soundOutputType = 0;
         }
     }
+    else
+        bDeviceHasAudio = bForceCustomAudio = false;
 
     int soundTimeOffset = data->GetInt(TEXT("soundTimeOffset"));
 
@@ -290,23 +360,25 @@ bool DeviceSource::LoadFilters()
     // log video info
 
     {
-        VIDEOINFOHEADER *pVih = reinterpret_cast<VIDEOINFOHEADER*>(bestOutput->mediaType->pbFormat);
-
-        String strTest = FormattedString(TEXT("    device: %s,\r\n    device id %s,\r\n    chosen type: %s, usingFourCC: %s, res: %ux%u - %ux%u, fps: %g-%g"),
+        String strTest = FormattedString(TEXT("    device: %s,\r\n    device id %s,\r\n    chosen type: %s, usingFourCC: %s, res: %ux%u - %ux%u, frameIntervals: %llu-%llu"),
             strDevice.Array(), strDeviceID.Array(),
             EnumToName[(int)bestOutput->videoType],
             bestOutput->bUsingFourCC ? TEXT("true") : TEXT("false"),
             bestOutput->minCX, bestOutput->minCY, bestOutput->maxCX, bestOutput->maxCY,
-            10000000.0/double(bestOutput->maxFrameInterval), 10000000.0/double(bestOutput->minFrameInterval));
+            bestOutput->minFrameInterval, bestOutput->maxFrameInterval);
+
+        BITMAPINFOHEADER *bmiHeader = GetVideoBMIHeader(bestOutput->mediaType);
 
         char fourcc[5];
-        mcpy(fourcc, &pVih->bmiHeader.biCompression, 4);
+        mcpy(fourcc, &bmiHeader->biCompression, 4);
         fourcc[4] = 0;
 
-        if(pVih->bmiHeader.biCompression > 1000)
+        if(bmiHeader->biCompression > 1000)
             strTest << FormattedString(TEXT(", fourCC: '%S'\r\n"), fourcc);
         else
-            strTest << FormattedString(TEXT(", fourCC: %08lX\r\n"), pVih->bmiHeader.biCompression);
+            strTest << FormattedString(TEXT(", fourCC: %08lX\r\n"), bmiHeader->biCompression);
+
+        if(!bDeviceHasAudio) strTest << FormattedString(TEXT("    audio device: %s,\r\n    audio device id %s,\r\n"), strAudioDevice.Array(), strAudioID.Array());
 
         Log(TEXT("------------------------------------------"));
         Log(strTest.Array());
@@ -371,16 +443,20 @@ bool DeviceSource::LoadFilters()
     AM_MEDIA_TYPE outputMediaType;
     CopyMediaType(&outputMediaType, bestOutput->mediaType);
 
-    VIDEOINFOHEADER *vih        = reinterpret_cast<VIDEOINFOHEADER*>(outputMediaType.pbFormat);
-    vih->AvgTimePerFrame        = frameInterval;
-    vih->bmiHeader.biWidth      = renderCX;
-    vih->bmiHeader.biHeight     = renderCY;
-    vih->bmiHeader.biSizeImage  = renderCX*renderCY*(vih->bmiHeader.biBitCount>>3);
+    VIDEOINFOHEADER *vih  = reinterpret_cast<VIDEOINFOHEADER*>(outputMediaType.pbFormat);
+    BITMAPINFOHEADER *bmi = GetVideoBMIHeader(&outputMediaType);
+    vih->AvgTimePerFrame  = frameInterval;
+    bmi->biWidth          = renderCX;
+    bmi->biHeight         = renderCY;
+    bmi->biSizeImage      = renderCX*renderCY*(bmi->biBitCount>>3);
 
     if(FAILED(err = config->SetFormat(&outputMediaType)))
     {
-        AppWarning(TEXT("DShowPlugin: SetFormat on device pin failed, result = %08lX"), err);
-        goto cleanFinish;
+        if(err != E_NOTIMPL)
+        {
+            AppWarning(TEXT("DShowPlugin: SetFormat on device pin failed, result = %08lX"), err);
+            goto cleanFinish;
+        }
     }
 
     FreeMediaType(outputMediaType);
@@ -396,47 +472,43 @@ bool DeviceSource::LoadFilters()
         if(SUCCEEDED(audioPin->QueryInterface(IID_IAMStreamConfig, (void**)&audioConfig)))
         {
             AM_MEDIA_TYPE *audioMediaType;
-            if(SUCCEEDED(audioConfig->GetFormat(&audioMediaType)))
+            if(SUCCEEDED(err = audioConfig->GetFormat(&audioMediaType)))
             {
-                expectedAudioType = audioMediaType->subtype;
-
-                if(audioMediaType->formattype == FORMAT_WaveFormatEx)
+                SetAudioInfo(audioMediaType, expectedAudioType);
+            }
+            else if(err == E_NOTIMPL) //elgato probably
+            {
+                IEnumMediaTypes *audioMediaTypes;
+                if(SUCCEEDED(err = audioPin->EnumMediaTypes(&audioMediaTypes)))
                 {
-                    WAVEFORMATEX *pFormat = reinterpret_cast<WAVEFORMATEX*>(audioMediaType->pbFormat);
-                    mcpy(&audioFormat, pFormat, sizeof(audioFormat));
-
-                    Log(TEXT("    device audio info - bits per sample: %u, channels: %u, samples per sec: %u"),
-                        audioFormat.wBitsPerSample, audioFormat.nChannels, audioFormat.nSamplesPerSec);
-
-                    //avoid local resampling if possible
-                    /*if(pFormat->nSamplesPerSec != 44100)
+                    ULONG i = 0;
+                    if((err = audioMediaTypes->Next(1, &audioMediaType, &i)) == S_OK)
+                        SetAudioInfo(audioMediaType, expectedAudioType);
+                    else
                     {
-                        pFormat->nSamplesPerSec = 44100;
-                        if(SUCCEEDED(audioConfig->SetFormat(audioMediaType)))
-                        {
-                            Log(TEXT("    also successfully set samples per sec to 44.1k"));
-                            audioFormat.nSamplesPerSec = 44100;
-                        }
-                    }*/
+                        AppWarning(TEXT("DShowPlugin: audioMediaTypes->Next failed, result = %08lX"), err);
+                        soundOutputType = 0;
+                    }
+
+                    audioMediaTypes->Release();
                 }
                 else
                 {
-                    AppWarning(TEXT("DShowPlugin: Audio format was not a normal wave format"));
+                    AppWarning(TEXT("DShowPlugin: audioMediaTypes->Next failed, result = %08lX"), err);
                     soundOutputType = 0;
                 }
-
-                DeleteMediaType(audioMediaType);
             }
             else
             {
-                AppWarning(TEXT("DShowPlugin: Could not get audio format"));
+                AppWarning(TEXT("DShowPlugin: Could not get audio format, result = %08lX"), err);
                 soundOutputType = 0;
             }
 
             audioConfig->Release();
         }
-        else
+        else {
             soundOutputType = 0;
+        }
     }
 
     //------------------------------------------------
@@ -460,7 +532,7 @@ bool DeviceSource::LoadFilters()
         audioFilter = new CaptureFilter(this, MEDIATYPE_Audio, expectedAudioType);
         if(!audioFilter)
         {
-            AppWarning(TEXT("Failed to create audio ccapture filter"));
+            AppWarning(TEXT("Failed to create audio capture filter"));
             soundOutputType = 0;
         }
     }
@@ -471,15 +543,22 @@ bool DeviceSource::LoadFilters()
             AppWarning(TEXT("DShowPlugin: failed to create audio renderer, result = %08lX"), err);
             soundOutputType = 0;
         }
+
+        IBasicAudio *basicAudio;
+        if(SUCCEEDED(audioFilter->QueryInterface(IID_IBasicAudio, (void**)&basicAudio)))
+        {
+            long lVol = long((double(volume)*NEAR_SILENTf)-NEAR_SILENTf);
+            if(lVol <= -NEAR_SILENT)
+                lVol = -10000;
+            basicAudio->put_Volume(lVol);
+            basicAudio->Release();
+        }
     }
 
     if(soundOutputType != 0)
     {
         if(FAILED(err = graph->AddFilter(audioFilter, NULL)))
-        {
             AppWarning(TEXT("DShowPlugin: Failed to add audio capture filter to graph, result = %08lX"), err);
-            goto cleanFinish;
-        }
 
         bAddedAudioCapture = true;
     }
@@ -493,18 +572,28 @@ bool DeviceSource::LoadFilters()
         goto cleanFinish;
     }
 
+    if(soundOutputType != 0 && !bDeviceHasAudio)
+    {
+        if(FAILED(err = graph->AddFilter(audioDeviceFilter, NULL)))
+            AppWarning(TEXT("DShowPlugin: Failed to add audio device filter to graph, result = %08lX"), err);
+    }
+
     bAddedDevice = true;
 
     //------------------------------------------------
     // connect all pins and set up the whole capture thing
 
-    /*IMediaFilter *mediaFilter;
-    if(SUCCEEDED(graph->QueryInterface(IID_IMediaFilter, (void**)&mediaFilter)))
+    /*if(bNoBuffering)
     {
-        if(FAILED(mediaFilter->SetSyncSource(NULL)))
-            AppWarning(TEXT("DShowPlugin: Failed to set sync source, result = %08lX"), err);
+        IMediaFilter *mediaFilter;
+        if(SUCCEEDED(graph->QueryInterface(IID_IMediaFilter, (void**)&mediaFilter)))
+        {
+            if(FAILED(mediaFilter->SetSyncSource(NULL)))
+                AppWarning(TEXT("DShowPlugin: Failed to set sync source, result = %08lX"), err);
 
-        mediaFilter->Release();
+            Log(TEXT("Disabling buffering (hopefully)"));
+            mediaFilter->Release();
+        }
     }*/
 
     //THANK THE NINE DIVINES I FINALLY GOT IT WORKING
@@ -520,7 +609,11 @@ bool DeviceSource::LoadFilters()
 
     if(soundOutputType != 0)
     {
-        bConnected = SUCCEEDED(err = capture->RenderStream(&PIN_CATEGORY_CAPTURE, &MEDIATYPE_Audio, deviceFilter, NULL, audioFilter));
+        if(!bDeviceHasAudio)
+            bConnected = SUCCEEDED(err = capture->RenderStream(&PIN_CATEGORY_CAPTURE, &MEDIATYPE_Audio, audioDeviceFilter, NULL, audioFilter));
+        else
+            bConnected = SUCCEEDED(err = capture->RenderStream(&PIN_CATEGORY_CAPTURE, &MEDIATYPE_Audio, deviceFilter, NULL, audioFilter));
+
         if(!bConnected)
         {
             AppWarning(TEXT("DShowPlugin: Failed to connect the audio device pin to the audio capture pin, result = %08lX"), err);
@@ -534,11 +627,26 @@ bool DeviceSource::LoadFilters()
         goto cleanFinish;
     }
 
+    if (bUseBuffering) {
+        if (!(hStopSampleEvent = CreateEvent(NULL, FALSE, FALSE, NULL))) {
+            AppWarning(TEXT("DShowPlugin: Failed to create stop event"), err);
+            goto cleanFinish;
+        }
+
+        if (!(hSampleThread = OSCreateThread((XTHREAD)SampleThread, this))) {
+            AppWarning(TEXT("DShowPlugin: Failed to create sample thread"), err);
+            goto cleanFinish;
+        }
+    }
+
     if(soundOutputType == 1)
     {
         audioOut = new DeviceAudioSource;
         audioOut->Initialize(this);
         API->AddAudioSource(audioOut);
+
+        audioOut->SetAudioOffset(soundTimeOffset);
+        audioOut->SetVolume(volume);
     }
 
     bSucceeded = true;
@@ -559,13 +667,31 @@ cleanFinish:
             graph->RemoveFilter(captureFilter);
         if(bAddedAudioCapture)
             graph->RemoveFilter(audioFilter);
-        if(bAddedDevice)
-            graph->RemoveFilter(deviceFilter);
 
+        if(bAddedDevice)
+        {
+            if(!bDeviceHasAudio)
+                graph->RemoveFilter(audioDeviceFilter);
+            graph->RemoveFilter(deviceFilter);
+        }
+
+        SafeRelease(audioDeviceFilter);
         SafeRelease(deviceFilter);
         SafeRelease(captureFilter);
         SafeRelease(audioFilter);
         SafeRelease(control);
+
+        if (hSampleThread) {
+            SetEvent(hStopSampleEvent);
+            WaitForSingleObject(hSampleThread, INFINITE);
+            CloseHandle(hSampleThread);
+            hSampleThread = NULL;
+        }
+
+        if (hStopSampleEvent) {
+            CloseHandle(hStopSampleEvent);
+            hStopSampleEvent = NULL;
+        }
 
         if(colorConvertShader)
         {
@@ -589,6 +715,9 @@ cleanFinish:
     }
     else
         bReadyToDraw = false;
+
+    if(!renderCX) renderCX = 32;
+    if(!renderCY) renderCY = 32;
 
     //-----------------------------------------------------
     // create the texture regardless, will just show up as red to indicate failure
@@ -627,6 +756,16 @@ cleanFinish:
 
 void DeviceSource::UnloadFilters()
 {
+    if (hSampleThread) {
+        SetEvent(hStopSampleEvent);
+        WaitForSingleObject(hSampleThread, INFINITE);
+        CloseHandle(hSampleThread);
+        CloseHandle(hStopSampleEvent);
+
+        hSampleThread = NULL;
+        hStopSampleEvent = NULL;
+    }
+
     if(texture)
     {
         delete texture;
@@ -664,12 +803,14 @@ void DeviceSource::UnloadFilters()
     {
         graph->RemoveFilter(captureFilter);
         graph->RemoveFilter(deviceFilter);
+        if(!bDeviceHasAudio) graph->RemoveFilter(audioDeviceFilter);
 
         if(audioFilter)
             graph->RemoveFilter(audioFilter);
 
         SafeReleaseLogRef(captureFilter);
         SafeReleaseLogRef(deviceFilter);
+        if(!bDeviceHasAudio) SafeReleaseLogRef(audioDeviceFilter);
         SafeReleaseLogRef(audioFilter);
 
         bFiltersLoaded = false;
@@ -732,38 +873,171 @@ void DeviceSource::EndScene()
     Stop();
 }
 
-void DeviceSource::ReceiveVideo(IMediaSample *sample)
+DWORD DeviceSource::SampleThread(DeviceSource *source)
 {
-    if(bCapturing)
-    {
+    HANDLE hSampleMutex = source->hSampleMutex;
+    LONGLONG lastTime = GetQPCTime100NS(), bufferTime = 0, frameWait = 0, curBufferTime = source->bufferTime;
+    LONGLONG lastSampleTime = 0;
+
+    bool bFirstFrame = true;
+    bool bFirstDelay = true;
+
+    while (WaitForSingleObject(source->hStopSampleEvent, 2) == WAIT_TIMEOUT) {
+        LONGLONG t = GetQPCTime100NS();
+        LONGLONG delta = t-lastTime;
+        lastTime = t;
+
         OSEnterMutex(hSampleMutex);
 
-        SafeRelease(curSample);
-        curSample = sample;
-        curSample->AddRef();
+        if (source->samples.Num()) {
+            if (bFirstFrame) {
+                bFirstFrame = false;
+                lastSampleTime = source->samples[0]->timestamp;
+            }
+
+            //wait until the requested delay has been buffered before processing packets
+            if (bufferTime >= source->bufferTime) {
+                frameWait += delta;
+
+                //if delay time was adjusted downward, remove packets accordingly
+                bool bBufferTimeChanged = (curBufferTime != source->bufferTime);
+                if (bBufferTimeChanged) {
+                    if (curBufferTime > source->bufferTime) {
+                        if (source->audioOut)
+                            source->audioOut->FlushSamples();
+
+                        LONGLONG lostTime = curBufferTime - source->bufferTime;
+                        bufferTime -= lostTime;
+
+                        if (source->samples.Num()) {
+                            LONGLONG startTime = source->samples[0]->timestamp;
+
+                            while (source->samples.Num()) {
+                                SampleData *sample = source->samples[0];
+
+                                if ((sample->timestamp - startTime) >= lostTime)
+                                    break;
+
+                                lastSampleTime = sample->timestamp;
+
+                                sample->Release();
+                                source->samples.Remove(0);
+                            }
+                        }
+                    }
+
+                    curBufferTime = source->bufferTime;
+                }
+
+                while (source->samples.Num()) {
+                    SampleData *sample = source->samples[0];
+
+                    LONGLONG timestamp = sample->timestamp;
+                    LONGLONG sampleTime = timestamp - lastSampleTime;
+
+                    //sometimes timestamps can go to shit with horrible garbage devices.
+                    //so, bypass any unusual timestamp offsets.
+                    if (sampleTime < -6000000 || sampleTime > 6000000) {
+                        //OSDebugOut(TEXT("sample time: %lld\r\n"), sampleTime);
+                        sampleTime = 0;
+                    }
+
+                    if (frameWait < sampleTime)
+                        break;
+
+                    if (sample->bAudio) {
+                        if (source->audioOut)
+                            source->audioOut->ReceiveAudio(sample->lpData, sample->dataLength);
+
+                        sample->Release();
+                    } else {
+                        SafeRelease(source->latestVideoSample);
+                        source->latestVideoSample = sample;
+                    }
+
+                    source->samples.Remove(0);
+
+                    if (sampleTime > 0)
+                        frameWait -= sampleTime;
+
+                    lastSampleTime = timestamp;
+                }
+            }
+        }
 
         OSLeaveMutex(hSampleMutex);
+
+        if (!bFirstFrame && bufferTime < source->bufferTime)
+            bufferTime += delta;
+    }
+
+    return 0;
+}
+
+UINT DeviceSource::GetSampleInsertIndex(LONGLONG timestamp)
+{
+    UINT index;
+    for (index=0; index<samples.Num(); index++) {
+        if (samples[index]->timestamp > timestamp)
+            return index;
+    }
+
+    return index;
+}
+
+void DeviceSource::ReceiveMediaSample(IMediaSample *sample, bool bAudio)
+{
+    if (!sample)
+        return;
+
+    if (bCapturing) {
+        BYTE *pointer;
+
+        if (SUCCEEDED(sample->GetPointer(&pointer))) {
+            SampleData *data = NULL;
+            
+            if (bUseBuffering || !bAudio) {
+                data = new SampleData;
+                data->bAudio = bAudio;
+                data->dataLength = sample->GetActualDataLength();
+                data->lpData = (LPBYTE)Allocate(data->dataLength);//pointer; //
+                /*data->sample = sample;
+                sample->AddRef();*/
+
+                SSECopy(data->lpData, pointer, data->dataLength);
+
+                LONGLONG stopTime;
+                sample->GetTime(&data->timestamp, &stopTime);
+            }
+
+            //Log(TEXT("timestamp: %lld, bAudio - %s"), data->timestamp, bAudio ? TEXT("true") : TEXT("false"));
+
+            OSEnterMutex(hSampleMutex);
+
+            if (bUseBuffering) {
+                UINT id = GetSampleInsertIndex(data->timestamp);
+                samples.Insert(id, data);
+            } else if (bAudio) {
+                if (audioOut)
+                    audioOut->ReceiveAudio(pointer, sample->GetActualDataLength());
+            } else {
+                SafeRelease(latestVideoSample);
+                latestVideoSample = data;
+            }
+
+            OSLeaveMutex(hSampleMutex);
+        }
     }
 }
 
-void DeviceSource::ReceiveAudio(IMediaSample *sample)
+static DWORD STDCALL PackPlanarThread(ConvertData *data)
 {
-    if(bCapturing && audioOut)
-    {
-        audioOut->ReceiveAudio(sample);
-    }
-}
-
-DWORD STDCALL PackPlanarThread(ConvertData *data)
-{
-    do
-    {
+    do {
         WaitForSingleObject(data->hSignalConvert, INFINITE);
         if(data->bKillThread) break;
 
-        IMediaSample *sample = data->sample;
         PackPlanar(data->output, data->input, data->width, data->height, data->pitch, data->startY, data->endY);
-        sample->Release();
+        data->sample->Release();
 
         SetEvent(data->hSignalComplete);
     }while(!data->bKillThread);
@@ -776,28 +1050,56 @@ void DeviceSource::Preprocess()
     if(!bCapturing)
         return;
 
-    IMediaSample *lastSample = NULL;
+    //----------------------------------------
+
+    if(bRequestVolume)
+    {
+        if(audioOut)
+            audioOut->SetVolume(fNewVol);
+        else if(audioFilter)
+        {
+            IBasicAudio *basicAudio;
+            if(SUCCEEDED(audioFilter->QueryInterface(IID_IBasicAudio, (void**)&basicAudio)))
+            {
+                long lVol = long((double(fNewVol)*NEAR_SILENTf)-NEAR_SILENTf);
+                if(lVol <= -NEAR_SILENT)
+                    lVol = -10000;
+                basicAudio->put_Volume(lVol);
+                basicAudio->Release();
+            }
+        }
+        bRequestVolume = false;
+    }
+
+    //----------------------------------------
+
+    SampleData *lastSample = NULL;
 
     OSEnterMutex(hSampleMutex);
-    if(curSample)
-    {
-        lastSample = curSample;
-        curSample = NULL;
-    }
+
+    lastSample = latestVideoSample;
+    latestVideoSample = NULL;
+
     OSLeaveMutex(hSampleMutex);
+
+    //----------------------------------------
 
     int numThreads = MAX(OSGetTotalCores()-2, 1);
 
     if(lastSample)
     {
-        BYTE *lpImage = NULL;
+        /*REFERENCE_TIME refTimeStart, refTimeFinish;
+        lastSample->GetTime(&refTimeStart, &refTimeFinish);
+
+        static REFERENCE_TIME lastRefTime = 0;
+        Log(TEXT("refTimeStart: %llu, refTimeFinish: %llu, offset = %llu"), refTimeStart, refTimeFinish, refTimeStart-lastRefTime);
+        lastRefTime = refTimeStart;*/
+
         if(colorType == DeviceOutputType_RGB)
         {
             if(texture)
             {
-                if(SUCCEEDED(lastSample->GetPointer(&lpImage)))
-                    texture->SetImage(lpImage, GS_IMAGEFORMAT_BGRX, renderCX*4);
-
+                texture->SetImage(lastSample->lpData, GS_IMAGEFORMAT_BGRX, renderCX*4);
                 bReadyToDraw = true;
             }
         }
@@ -819,33 +1121,27 @@ void DeviceSource::Preprocess()
                 else
                     bFirstFrame = false;
 
-                if(SUCCEEDED(lastSample->GetPointer(&lpImage)))
-                {
-                    for(int i=0; i<numThreads; i++)
-                        lastSample->AddRef();
+                for(int i=0; i<numThreads; i++)
+                    lastSample->AddRef();
 
-                    for(int i=0; i<numThreads; i++)
-                    {
-                        convertData[i].input    = lpImage;
-                        convertData[i].pitch    = texturePitch;
-                        convertData[i].output   = lpImageBuffer;
-                        convertData[i].sample   = lastSample;
-                        SetEvent(convertData[i].hSignalConvert);
-                    }
+                for(int i=0; i<numThreads; i++)
+                {
+                    convertData[i].input    = lastSample->lpData;
+                    convertData[i].sample   = lastSample;
+                    convertData[i].pitch    = texturePitch;
+                    convertData[i].output   = lpImageBuffer;
+                    SetEvent(convertData[i].hSignalConvert);
                 }
             }
             else
             {
-                if(SUCCEEDED(lastSample->GetPointer(&lpImage)))
-                {
-                    LPBYTE lpData;
-                    UINT pitch;
+                LPBYTE lpData;
+                UINT pitch;
 
-                    if(texture->Map(lpData, pitch))
-                    {
-                        PackPlanar(lpData, lpImage, renderCX, renderCY, pitch, 0, renderCY);
-                        texture->Unmap();
-                    }
+                if(texture->Map(lpData, pitch))
+                {
+                    PackPlanar(lpData, lastSample->lpData, renderCX, renderCY, pitch, 0, renderCY);
+                    texture->Unmap();
                 }
 
                 bReadyToDraw = true;
@@ -853,32 +1149,26 @@ void DeviceSource::Preprocess()
         }
         else if(colorType == DeviceOutputType_YVYU || colorType == DeviceOutputType_YUY2)
         {
-            if(SUCCEEDED(lastSample->GetPointer(&lpImage)))
-            {
-                LPBYTE lpData;
-                UINT pitch;
+            LPBYTE lpData;
+            UINT pitch;
 
-                if(texture->Map(lpData, pitch))
-                {
-                    Convert422To444(lpData, lpImage, pitch, true);
-                    texture->Unmap();
-                }
+            if(texture->Map(lpData, pitch))
+            {
+                Convert422To444(lpData, lastSample->lpData, pitch, true);
+                texture->Unmap();
             }
 
             bReadyToDraw = true;
         }
         else if(colorType == DeviceOutputType_UYVY || colorType == DeviceOutputType_HDYC)
         {
-            if(SUCCEEDED(lastSample->GetPointer(&lpImage)))
-            {
-                LPBYTE lpData;
-                UINT pitch;
+            LPBYTE lpData;
+            UINT pitch;
 
-                if(texture->Map(lpData, pitch))
-                {
-                    Convert422To444(lpData, lpImage, pitch, false);
-                    texture->Unmap();
-                }
+            if(texture->Map(lpData, pitch))
+            {
+                Convert422To444(lpData, lastSample->lpData, pitch, false);
+                texture->Unmap();
             }
 
             bReadyToDraw = true;
@@ -893,10 +1183,11 @@ void DeviceSource::Render(const Vect2 &pos, const Vect2 &size)
     if(texture && bReadyToDraw)
     {
         Shader *oldShader = GetCurrentPixelShader();
+        SamplerState *sampler = NULL;
+
         if(colorConvertShader)
         {
             LoadPixelShader(colorConvertShader);
-
             if(bUseChromaKey)
             {
                 float fSimilarity = float(keySimilarity)/1000.0f;
@@ -934,10 +1225,19 @@ void DeviceSource::Render(const Vect2 &pos, const Vect2 &size)
         float fOpacity = float(opacity)*0.01f;
         DWORD opacity255 = DWORD(fOpacity*255.0f);
 
+        if(bUsePointFiltering) {
+            SamplerInfo samplerinfo;
+            samplerinfo.filter = GS_FILTER_POINT;
+            sampler = CreateSamplerState(samplerinfo);
+            LoadSamplerState(sampler, 0);
+        }
+
         if(bFlip)
             DrawSprite(texture, (opacity255<<24) | 0xFFFFFF, x, pos.y, x2, pos.y+size.y);
         else
             DrawSprite(texture, (opacity255<<24) | 0xFFFFFF, x, pos.y+size.y, x2, pos.y);
+
+        if(bUsePointFiltering) delete(sampler);
 
         if(colorConvertShader)
             LoadPixelShader(oldShader);
@@ -946,14 +1246,20 @@ void DeviceSource::Render(const Vect2 &pos, const Vect2 &size)
 
 void DeviceSource::UpdateSettings()
 {
-    String strNewDevice     = data->GetString(TEXT("device"));
-    UINT64 newFrameInterval = data->GetInt(TEXT("frameInterval"));
-    UINT newCX              = data->GetInt(TEXT("resolutionWidth"));
-    UINT newCY              = data->GetInt(TEXT("resolutionHeight"));
-    BOOL bNewCustom         = data->GetInt(TEXT("customResolution"));
-    UINT newPreferredType   = data->GetInt(TEXT("usePreferredType")) != 0 ? data->GetInt(TEXT("preferredType")) : -1;
+    String strNewDevice         = data->GetString(TEXT("device"));
+    String strNewAudioDevice    = data->GetString(TEXT("audioDevice"));
+    UINT64 newFrameInterval     = data->GetInt(TEXT("frameInterval"));
+    UINT newCX                  = data->GetInt(TEXT("resolutionWidth"));
+    UINT newCY                  = data->GetInt(TEXT("resolutionHeight"));
+    BOOL bNewCustom             = data->GetInt(TEXT("customResolution"));
+    UINT newPreferredType       = data->GetInt(TEXT("usePreferredType")) != 0 ? data->GetInt(TEXT("preferredType")) : -1;
+    UINT newSoundOutputType     = data->GetInt(TEXT("soundOutputType"));
+    bool bNewUseBuffering       = data->GetInt(TEXT("useBuffering")) != 0;
 
-    if(renderCX != newCX || renderCY != newCY || frameInterval != newFrameInterval || newPreferredType != preferredOutputType || !strDevice.CompareI(strNewDevice) || bNewCustom != bUseCustomResolution)
+    if(newSoundOutputType != soundOutputType || renderCX != newCX || renderCY != newCY ||
+       frameInterval != newFrameInterval || newPreferredType != preferredOutputType ||
+       !strDevice.CompareI(strNewDevice) || !strAudioDevice.CompareI(strNewAudioDevice) ||
+       bNewCustom != bUseCustomResolution || bNewUseBuffering != bUseBuffering)
     {
         API->EnterSceneMutex();
 
@@ -1038,7 +1344,23 @@ void DeviceSource::SetInt(CTSTR lpName, int iVal)
         else if(scmpi(lpName, TEXT("timeOffset")) == 0)
         {
             if(audioOut)
-                audioOut->SetTimeOffset(iVal);
+                audioOut->SetAudioOffset(iVal);
         }
+        else if(scmpi(lpName, TEXT("bufferTime")) == 0)
+        {
+            bufferTime = iVal*10000;
+        }
+    }
+}
+
+void DeviceSource::SetFloat(CTSTR lpName, float fValue)
+{
+    if(!bCapturing)
+        return;
+
+    if(scmpi(lpName, TEXT("volume")) == 0)
+    {
+        fNewVol = fValue;
+        bRequestVolume = true;
     }
 }

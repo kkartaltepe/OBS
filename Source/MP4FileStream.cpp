@@ -26,7 +26,6 @@ time_t GetMacTime()
     return time(0)+2082844800;
 }
 
-
 struct SampleToChunk
 {
     UINT firstChunkID;
@@ -63,7 +62,7 @@ inline UINT64 ConvertToAudioTime(DWORD timestamp, UINT64 minVal)
 }
 
 
-//code annoyance rating: fairly nightmarish
+//code annoyance rating: nightmarish
 
 class MP4FileStream : public VideoFileStream
 {
@@ -79,15 +78,28 @@ class MP4FileStream : public VideoFileStream
 
     bool            bStreamOpened;
     bool            bMP3;
-    bool            bUseCTSAdjust;
 
     List<BYTE>      endBuffer;
     List<UINT>      boxOffsets;
 
+    //chunk stuiff
+    UINT64 connectedAudioSampleOffset, connectedVideoSampleOffset;
+    UINT64 curVideoChunkOffset, curAudioChunkOffset;
+    UINT numVideoSamples, numAudioSamples;
+    List<UINT64> videoChunks, audioChunks;
+    List<SampleToChunk> videoSampleToChunk, audioSampleToChunk;
+
+    //decode times and composition offsets
+    UINT64 lastAudioTimeVal;
+    UINT64 audioFrameSize;
+    List<OffsetVal> videoDecodeTimes, audioDecodeTimes;
+    List<OffsetVal> compositionOffsets;
+
     UINT64 mdatStart, mdatStop;
 
-    bool bSentFirstVideoPacket;
     bool bCancelMP4Build;
+
+    bool bSentSEI;
 
     void PushBox(BufferOutputSerializer &output, DWORD boxName)
     {
@@ -138,8 +150,6 @@ public:
         if(!fileOut.Open(lpFile, XFILE_CREATEALWAYS, 1024*1024))
             return false;
 
-        bUseCTSAdjust = !AppConfig->GetInt(TEXT("Video Encoding"), TEXT("DisableCTSAdjust"));
-
         fileOut.OutputDword(DWORD_BE(0x20));
         fileOut.OutputDword(DWORD_BE('ftyp'));
         fileOut.OutputDword(DWORD_BE('isom'));
@@ -161,44 +171,44 @@ public:
 
         bMP3 = scmp(App->GetAudioEncoder()->GetCodec(), TEXT("MP3")) == 0;
 
+        audioFrameSize = App->GetAudioEncoder()->GetFrameSize();
+
         bStreamOpened = true;
 
         return true;
     }
 
-    template<typename T> inline void GetChunkInfo(List<T> &data, List<UINT64> &chunks, List<SampleToChunk> &sampleToChunks)
+    template<typename T> void GetChunkInfo(const T &data, UINT index,
+                                                  List<UINT64> &chunks, List<SampleToChunk> &sampleToChunks,
+                                                  UINT64 &curChunkOffset, UINT64 &connectedSampleOffset, UINT &numSamples)
     {
-        UINT64 curChunkOffset;
-        UINT64 connectedSampleOffset;
-        UINT numSamples = 0;
-
-        for(UINT i=0; i<data.Num(); i++)
+        UINT64 curOffset = data.fileOffset;
+        if(index == 0)
+            curChunkOffset = curOffset;
+        else
         {
-            UINT64 curOffset = data[i].fileOffset;
-            if(i == 0)
-                curChunkOffset = curOffset;
-            else
+            if(curOffset != connectedSampleOffset)
             {
-                if(curOffset != connectedSampleOffset)
+                chunks << curChunkOffset;
+                if(!sampleToChunks.Num() || sampleToChunks.Last().samplesPerChunk != numSamples)
                 {
-                    chunks << curChunkOffset;
-                    if(!sampleToChunks.Num() || sampleToChunks.Last().samplesPerChunk != numSamples)
-                    {
-                        SampleToChunk stc;
-                        stc.firstChunkID = chunks.Num();
-                        stc.samplesPerChunk = numSamples;
-                        sampleToChunks << stc;
-                    }
-
-                    curChunkOffset = curOffset;
-                    numSamples = 0;
+                    SampleToChunk stc;
+                    stc.firstChunkID = chunks.Num();
+                    stc.samplesPerChunk = numSamples;
+                    sampleToChunks << stc;
                 }
-            }
 
-            numSamples++;
-            connectedSampleOffset = curOffset+data[i].size;
+                curChunkOffset = curOffset;
+                numSamples = 0;
+            }
         }
 
+        numSamples++;
+        connectedSampleOffset = curOffset+data.size;
+    }
+
+    inline void EndChunkInfo(List<UINT64> &chunks, List<SampleToChunk> &sampleToChunks, UINT64 &curChunkOffset, UINT &numSamples)
+    {
         chunks << curChunkOffset;
         if(!sampleToChunks.Num() || sampleToChunks.Last().samplesPerChunk != numSamples)
         {
@@ -209,12 +219,75 @@ public:
         }
     }
 
+    void GetVideoDecodeTime(MP4VideoFrameInfo &videoFrame, bool bLast)
+    {
+        UINT frameTime;
+
+        if(bLast)
+            frameTime = videoDecodeTimes.Last().val;
+        else
+            frameTime = videoFrame.timestamp-videoFrames.Last().timestamp;
+
+        if(!videoDecodeTimes.Num() || videoDecodeTimes.Last().val != (UINT)frameTime)
+        {
+            OffsetVal newVal;
+            newVal.count = 1;
+            newVal.val = (UINT)frameTime;
+            videoDecodeTimes << newVal;
+        }
+        else
+            videoDecodeTimes.Last().count++;
+
+        INT compositionOffset = videoFrames.Last().compositionOffset;
+        if(!compositionOffsets.Num() || compositionOffsets.Last().val != (UINT)compositionOffset)
+        {
+            OffsetVal newVal;
+            newVal.count = 1;
+            newVal.val = (UINT)compositionOffset;
+            compositionOffsets << newVal;
+        }
+        else
+            compositionOffsets.Last().count++;
+    }
+
+    void GetAudioDecodeTime(MP4AudioFrameInfo &audioFrame, bool bLast)
+    {
+        UINT frameTime;
+        if(bLast)
+            frameTime = audioDecodeTimes.Last().val;
+        else
+        {
+            UINT64 newTimeVal = lastAudioTimeVal+audioFrameSize;
+            if(audioFrames.Num() > 1)
+            {
+                UINT64 convertedTime = ConvertToAudioTime(audioFrame.timestamp, audioFrameSize*audioFrames.Num());
+                if(convertedTime > newTimeVal)
+                    newTimeVal = convertedTime;
+            }
+
+            frameTime = UINT(newTimeVal - lastAudioTimeVal);
+            lastAudioTimeVal = newTimeVal;
+        }
+
+        if(!audioDecodeTimes.Num() || audioDecodeTimes.Last().val != (UINT)frameTime)
+        {
+            OffsetVal newVal;
+            newVal.count = 1;
+            newVal.val = (UINT)frameTime;
+            audioDecodeTimes << newVal;
+        }
+        else
+            audioDecodeTimes.Last().count++;
+    }
+
     ~MP4FileStream()
     {
         if(!bStreamOpened)
             return;
 
         App->EnableSceneSwitching(false);
+
+        //---------------------------------------------------
 
         HWND hwndProgressDialog = CreateDialog(hinstMain, MAKEINTRESOURCE(IDD_BUILDINGMP4), hwndMain, (DLGPROC)MP4ProgressDialogProc);
         SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETRANGE32, 0, 100);
@@ -231,8 +304,10 @@ public:
         UINT width, height;
         App->GetOutputSize(width, height);
 
-        LPCSTR lpVideoTrack = "videoTrack";
-        LPCSTR lpAudioTrack = "audioTrack";
+        LPCSTR lpVideoTrack = "Video Media Handler";
+        LPCSTR lpAudioTrack = "Sound Media Handler";
+
+        char videoCompressionName[31] = "AVC Coding";
 
         //-------------------------------------------
         // get video headers
@@ -257,90 +332,15 @@ public:
         }
 
         //-------------------------------------------
-        // get chunk info
-        List<UINT64> videoChunks, audioChunks;
-        List<SampleToChunk> videoSampleToChunk, audioSampleToChunk;
 
-        GetChunkInfo<MP4VideoFrameInfo>(videoFrames, videoChunks, videoSampleToChunk);
-        GetChunkInfo<MP4AudioFrameInfo>(audioFrames, audioChunks, audioSampleToChunk);
+        EndChunkInfo(videoChunks, videoSampleToChunk, curVideoChunkOffset, numVideoSamples);
+        EndChunkInfo(audioChunks, audioSampleToChunk, curAudioChunkOffset, numAudioSamples);
 
-        //-------------------------------------------
-        // build decode time list and composition offset list
-        List<OffsetVal> decodeTimes;
-        List<OffsetVal> compositionOffsets;
+        if (numVideoSamples > 1)
+            GetVideoDecodeTime(videoFrames.Last(), true);
 
-        for(UINT i=0; i<videoFrames.Num(); i++)
-        {
-            UINT frameTime;
-            if(i == videoFrames.Num()-1)
-                frameTime = decodeTimes.Last().val;
-            else
-                frameTime = videoFrames[i+1].timestamp-videoFrames[i].timestamp;
-
-            if(!decodeTimes.Num() || decodeTimes.Last().val != (UINT)frameTime)
-            {
-                OffsetVal newVal;
-                newVal.count = 1;
-                newVal.val = (UINT)frameTime;
-                decodeTimes << newVal;
-            }
-            else
-                decodeTimes.Last().count++;
-
-            INT compositionOffset = videoFrames[i].compositionOffset;
-            if(!compositionOffsets.Num() || compositionOffsets.Last().val != (UINT)compositionOffset)
-            {
-                OffsetVal newVal;
-                newVal.count = 1;
-                newVal.val = (UINT)compositionOffset;
-                compositionOffsets << newVal;
-            }
-            else
-                compositionOffsets.Last().count++;
-
-            SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, (i*20)/videoFrames.Num(), 0);
-            ProcessEvents();
-        }
-
-        SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 20, 0);
-
-        //-------------------------------------------
-        // build audio decode time list
-        List<OffsetVal> audioDecodeTimes;
-
-        UINT64 lastAudioTimeVal = 0;
-
-        for(UINT i=0; i<audioFrames.Num(); i++)
-        {
-            UINT frameTime;
-            if(i == audioFrames.Num()-1)
-                frameTime = audioDecodeTimes.Last().val;
-            else
-            {
-                UINT64 newTimeVal = lastAudioTimeVal+audioFrameSize;
-                if(i)
-                {
-                    UINT64 convertedTime = ConvertToAudioTime(audioFrames[i+1].timestamp, audioFrameSize*(i+1));
-                    if(convertedTime > newTimeVal)
-                        newTimeVal = convertedTime;
-                }
-
-                frameTime = UINT(newTimeVal - lastAudioTimeVal);
-                lastAudioTimeVal = newTimeVal;
-            }
-
-            if(!audioDecodeTimes.Num() || audioDecodeTimes.Last().val != (UINT)frameTime)
-            {
-                OffsetVal newVal;
-                newVal.count = 1;
-                newVal.val = (UINT)frameTime;
-                audioDecodeTimes << newVal;
-            }
-            else
-                audioDecodeTimes.Last().count++;
-
-            ProcessEvents();
-        }
+        if (numAudioSamples > 1)
+            GetAudioDecodeTime(audioFrames.Last(), true);
 
         UINT audioUnitDuration = fastHtonl(UINT(lastAudioTimeVal));
 
@@ -348,44 +348,44 @@ public:
 
         //-------------------------------------------
         // sound descriptor thingy.  this part made me die a little inside admittedly.
-        UINT maxBitRate = fastHtonl(App->GetAudioEncoder()->GetBitRate()*1024);
+        UINT maxBitRate = fastHtonl(App->GetAudioEncoder()->GetBitRate()*1000);
 
         List<BYTE> esDecoderDescriptor;
         BufferOutputSerializer esDecoderOut(esDecoderDescriptor);
         esDecoderOut.OutputByte(bMP3 ? 107 : 64);
         esDecoderOut.OutputByte(0x15); //stream/type flags.  always 0x15 for my purposes.
-        esDecoderOut.OutputWord(0); //buffer size (seems ignorable from my testing, so 0)
-        esDecoderOut.OutputByte(0);
+        esDecoderOut.OutputByte(0); //buffer size, just set it to 1536 for both mp3 and aac
+        esDecoderOut.OutputWord(WORD_BE(0x600)); 
         esDecoderOut.OutputDword(maxBitRate); //max bit rate (cue bill 'o reily meme for these two)
         esDecoderOut.OutputDword(maxBitRate); //avg bit rate
 
         if(!bMP3) //if AAC, put in headers
         {
             esDecoderOut.OutputByte(0x5);  //decoder specific descriptor type
-            esDecoderOut.OutputByte(0x80); //some stuff that no one should probably care about
+            /*esDecoderOut.OutputByte(0x80); //some stuff that no one should probably care about
             esDecoderOut.OutputByte(0x80);
-            esDecoderOut.OutputByte(0x80);
+            esDecoderOut.OutputByte(0x80);*/
             esDecoderOut.OutputByte(AACHeader.Num());
             esDecoderOut.Serialize((LPVOID)AACHeader.Array(), AACHeader.Num());
         }
 
-        esDecoderOut.OutputByte(0x6);  //config descriptor type
-        esDecoderOut.OutputByte(0x80); //some stuff that no one should probably care about
-        esDecoderOut.OutputByte(0x80);
-        esDecoderOut.OutputByte(0x80);
-        esDecoderOut.OutputByte(1); //len
-        esDecoderOut.OutputByte(2); //SL value(? always 2)
 
         List<BYTE> esDescriptor;
         BufferOutputSerializer esOut(esDescriptor);
         esOut.OutputWord(0); //es id
         esOut.OutputByte(0); //stream priority
         esOut.OutputByte(4); //descriptor type
-        esOut.OutputByte(0x80); //some stuff that no one should probably care about
+        /*esOut.OutputByte(0x80); //some stuff that no one should probably care about
         esOut.OutputByte(0x80);
-        esOut.OutputByte(0x80);
+        esOut.OutputByte(0x80);*/
         esOut.OutputByte(esDecoderDescriptor.Num());
         esOut.Serialize((LPVOID)esDecoderDescriptor.Array(), esDecoderDescriptor.Num());
+        esOut.OutputByte(0x6);  //config descriptor type
+        /*esOut.OutputByte(0x80); //some stuff that no one should probably care about
+        esOut.OutputByte(0x80);
+        esOut.OutputByte(0x80);*/
+        esOut.OutputByte(1); //len
+        esOut.OutputByte(2); //SL value(? always 2)
 
         //-------------------------------------------
 
@@ -416,13 +416,163 @@ public:
           PopBox(); //mvhd
 
           //------------------------------------------------------
-          // video track
+          // audio track
           PushBox(output, DWORD_BE('trak'));
             PushBox(output, DWORD_BE('tkhd')); //track header
-              output.OutputDword(DWORD_BE(0x0000000F)); //version (0) and flags (0xF)
+              output.OutputDword(DWORD_BE(0x00000007)); //version (0) and flags (0xF)
               output.OutputDword(macTime); //creation time
               output.OutputDword(macTime); //modified time
               output.OutputDword(DWORD_BE(1)); //track ID
+              output.OutputDword(0); //reserved
+              output.OutputDword(audioDuration); //duration (in time base units)
+              output.OutputQword(0); //reserved
+              output.OutputWord(0); //video layer (0)
+              output.OutputWord(WORD_BE(0)); //quicktime alternate track id
+              output.OutputWord(WORD_BE(0x0100)); //volume
+              output.OutputWord(0); //reserved
+              output.OutputDword(DWORD_BE(0x00010000)); output.OutputDword(DWORD_BE(0x00000000)); output.OutputDword(DWORD_BE(0x00000000)); //window matrix row 1 (1.0, 0.0, 0.0)
+              output.OutputDword(DWORD_BE(0x00000000)); output.OutputDword(DWORD_BE(0x00010000)); output.OutputDword(DWORD_BE(0x00000000)); //window matrix row 2 (0.0, 1.0, 0.0)
+              output.OutputDword(DWORD_BE(0x00000000)); output.OutputDword(DWORD_BE(0x00000000)); output.OutputDword(DWORD_BE(0x40000000)); //window matrix row 3 (0.0, 0.0, 16384.0)
+              output.OutputDword(0); //width (fixed point)
+              output.OutputDword(0); //height (fixed point)
+            PopBox(); //tkhd
+            /*PushBox(output, DWORD_BE('edts'));
+              PushBox(output, DWORD_BE('elst'));
+                output.OutputDword(0); //version and flags (none)
+                output.OutputDword(DWORD_BE(1)); //count
+                output.OutputDword(audioDuration); //duration
+                output.OutputDword(0); //start time
+                output.OutputDword(DWORD_BE(0x00010000)); //playback speed (1.0)
+              PopBox(); //elst
+            PopBox(); //tdst*/
+            PushBox(output, DWORD_BE('mdia'));
+              PushBox(output, DWORD_BE('mdhd'));
+                output.OutputDword(0); //version and flags (none)
+                output.OutputDword(macTime); //creation time
+                output.OutputDword(macTime); //modified time
+                output.OutputDword(DWORD_BE(44100)); //time scale
+                output.OutputDword(audioUnitDuration);
+                output.OutputDword(bMP3 ? DWORD_BE(0x55c40000) : DWORD_BE(0x15c70000));
+              PopBox(); //mdhd
+              PushBox(output, DWORD_BE('hdlr'));
+                output.OutputDword(0); //version and flags (none)
+                output.OutputDword(0); //quicktime type (none)
+                output.OutputDword(DWORD_BE('soun')); //media type
+                output.OutputDword(0); //manufacturer reserved
+                output.OutputDword(0); //quicktime component reserved flags
+                output.OutputDword(0); //quicktime component reserved mask
+                output.Serialize((LPVOID)lpAudioTrack, (DWORD)strlen(lpAudioTrack)+1); //track name
+              PopBox(); //hdlr
+              PushBox(output, DWORD_BE('minf'));
+                PushBox(output, DWORD_BE('smhd'));
+                  output.OutputDword(0); //version and flags (none)
+                  output.OutputDword(0); //balance (fixed point)
+                PopBox(); //vdhd
+                PushBox(output, DWORD_BE('dinf'));
+                  PushBox(output, DWORD_BE('dref'));
+                    output.OutputDword(0); //version and flags (none)
+                    output.OutputDword(DWORD_BE(1)); //count
+                    PushBox(output, DWORD_BE('url '));
+                      output.OutputDword(DWORD_BE(0x00000001)); //version (0) and flags (1)
+                    PopBox(); //url
+                  PopBox(); //dref
+                PopBox(); //dinf
+                PushBox(output, DWORD_BE('stbl'));
+                  PushBox(output, DWORD_BE('stsd'));
+                    output.OutputDword(0); //version and flags (none)
+                    output.OutputDword(DWORD_BE(1)); //count
+                    PushBox(output, DWORD_BE('mp4a'));
+                      output.OutputDword(0); //reserved (6 bytes)
+                      output.OutputWord(0);
+                      output.OutputWord(WORD_BE(1)); //dref index
+                      output.OutputWord(0); //quicktime encoding version
+                      output.OutputWord(0); //quicktime encoding revision
+                      output.OutputDword(0); //quicktime audio encoding vendor
+                      output.OutputWord(0); //channels (ignored)
+                      output.OutputWord(WORD_BE(16)); //sample size
+                      output.OutputWord(0); //quicktime audio compression id
+                      output.OutputWord(0); //quicktime audio packet size
+                      output.OutputDword(DWORD_BE(44100<<16)); //sample rate (fixed point)
+                      PushBox(output, DWORD_BE('esds'));
+                        output.OutputDword(0); //version and flags (none)
+                        output.OutputByte(3); //ES descriptor type
+                        /*output.OutputByte(0x80);
+                        output.OutputByte(0x80);
+                        output.OutputByte(0x80);*/
+                        output.OutputByte(esDescriptor.Num());
+                        output.Serialize((LPVOID)esDescriptor.Array(), esDescriptor.Num());
+                      PopBox();
+                    PopBox();
+                  PopBox(); //stsd
+                  PushBox(output, DWORD_BE('stts')); //list of keyframe (i-frame) IDs
+                    output.OutputDword(0); //version and flags (none)
+                    output.OutputDword(fastHtonl(audioDecodeTimes.Num()));
+                    for(UINT i=0; i<audioDecodeTimes.Num(); i++)
+                    {
+                        output.OutputDword(fastHtonl(audioDecodeTimes[i].count));
+                        output.OutputDword(fastHtonl(audioDecodeTimes[i].val));
+                    }
+                  PopBox(); //stss
+                  PushBox(output, DWORD_BE('stsc')); //sample to chunk list
+                    output.OutputDword(0); //version and flags (none)
+                    output.OutputDword(fastHtonl(audioSampleToChunk.Num()));
+                    for(UINT i=0; i<audioSampleToChunk.Num(); i++)
+                    {
+                        SampleToChunk &stc  = audioSampleToChunk[i];
+                        output.OutputDword(fastHtonl(stc.firstChunkID));
+                        output.OutputDword(fastHtonl(stc.samplesPerChunk));
+                        output.OutputDword(DWORD_BE(1));
+                    }
+                  PopBox(); //stsc
+
+                  SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 30, 0);
+                  ProcessEvents();
+
+                  PushBox(output, DWORD_BE('stsz')); //sample sizes
+                    output.OutputDword(0); //version and flags (none)
+                    output.OutputDword(0); //block size for all (0 if differing sizes)
+                    output.OutputDword(fastHtonl(audioFrames.Num()));
+                    for(UINT i=0; i<audioFrames.Num(); i++)
+                        output.OutputDword(fastHtonl(audioFrames[i].size));
+                  PopBox();
+
+                  SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 40, 0);
+                  ProcessEvents();
+
+                  if(audioChunks.Num() && audioChunks.Last() > 0xFFFFFFFFLL)
+                  {
+                      PushBox(output, DWORD_BE('co64')); //chunk offsets
+                      output.OutputDword(0); //version and flags (none)
+                      output.OutputDword(fastHtonl(audioChunks.Num()));
+                      for(UINT i=0; i<audioChunks.Num(); i++)
+                          output.OutputQword(fastHtonll(audioChunks[i]));
+                      PopBox(); //co64
+                  }
+                  else
+                  {
+                      PushBox(output, DWORD_BE('stco')); //chunk offsets
+                        output.OutputDword(0); //version and flags (none)
+                        output.OutputDword(fastHtonl(audioChunks.Num()));
+                        for(UINT i=0; i<audioChunks.Num(); i++)
+                            output.OutputDword(fastHtonl((DWORD)audioChunks[i]));
+                      PopBox(); //stco
+                  }
+                PopBox(); //stbl
+              PopBox(); //minf
+            PopBox(); //mdia
+          PopBox(); //trak
+
+          SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 50, 0);
+          ProcessEvents();
+
+          //------------------------------------------------------
+          // video track
+          PushBox(output, DWORD_BE('trak'));
+            PushBox(output, DWORD_BE('tkhd')); //track header
+              output.OutputDword(DWORD_BE(0x00000007)); //version (0) and flags (0x7)
+              output.OutputDword(macTime); //creation time
+              output.OutputDword(macTime); //modified time
+              output.OutputDword(DWORD_BE(2)); //track ID
               output.OutputDword(0); //reserved
               output.OutputDword(videoDuration); //duration (in time base units)
               output.OutputQword(0); //reserved
@@ -436,7 +586,7 @@ public:
               output.OutputDword(fastHtonl(width<<16));  //width (fixed point)
               output.OutputDword(fastHtonl(height<<16)); //height (fixed point)
             PopBox(); //tkhd
-            PushBox(output, DWORD_BE('edts'));
+            /*PushBox(output, DWORD_BE('edts'));
               PushBox(output, DWORD_BE('elst'));
                 output.OutputDword(0); //version and flags (none)
                 output.OutputDword(DWORD_BE(1)); //count
@@ -444,7 +594,7 @@ public:
                 output.OutputDword(0); //start time
                 output.OutputDword(DWORD_BE(0x00010000)); //playback speed (1.0)
               PopBox(); //elst
-            PopBox(); //tdst
+            PopBox(); //tdst*/
             PushBox(output, DWORD_BE('mdia'));
               PushBox(output, DWORD_BE('mdhd'));
                 output.OutputDword(0); //version and flags (none)
@@ -499,8 +649,8 @@ public:
                       output.OutputDword(DWORD_BE(0x00480000)); //fixed point height pixel resolution (72.0)
                       output.OutputDword(0); //quicktime video data size 
                       output.OutputWord(WORD_BE(1)); //frame count(?)
-                      for(UINT i=0; i<4; i++) //encoding name (byte 1 = string length, 31 bytes = string (whats the point of having a size here?)
-                        output.OutputQword(0);
+                      output.OutputByte((BYTE)strlen(videoCompressionName)); //compression name length
+                      output.Serialize(videoCompressionName, 31); //31 bytes for the name
                       output.OutputWord(WORD_BE(24)); //bit depth
                       output.OutputWord(0xFFFF); //quicktime video color table id (none = -1)
                       PushBox(output, DWORD_BE('avcC'));
@@ -520,15 +670,15 @@ public:
                   PopBox(); //stsd
                   PushBox(output, DWORD_BE('stts')); //frame times
                     output.OutputDword(0); //version and flags (none)
-                    output.OutputDword(fastHtonl(decodeTimes.Num()));
-                    for(UINT i=0; i<decodeTimes.Num(); i++)
+                    output.OutputDword(fastHtonl(videoDecodeTimes.Num()));
+                    for(UINT i=0; i<videoDecodeTimes.Num(); i++)
                     {
-                        output.OutputDword(fastHtonl(decodeTimes[i].count));
-                        output.OutputDword(fastHtonl(decodeTimes[i].val));
+                        output.OutputDword(fastHtonl(videoDecodeTimes[i].count));
+                        output.OutputDword(fastHtonl(videoDecodeTimes[i].val));
                     }
                   PopBox(); //stts
 
-                  SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 30, 0);
+                  SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 60, 0);
                   ProcessEvents();
 
                   PushBox(output, DWORD_BE('stss')); //list of keyframe (i-frame) IDs
@@ -537,10 +687,8 @@ public:
                     output.Serialize(IFrameIDs.Array(), IFrameIDs.Num()*sizeof(UINT));
                   PopBox(); //stss
                   PushBox(output, DWORD_BE('ctts')); //list of composition time offsets
-                    if(bUseCTSAdjust)
-                        output.OutputDword(0); //version (0) and flags (none)
-                    else
-                        output.OutputDword(DWORD_BE(0x01000000)); //version (1) and flags (none)
+                    output.OutputDword(0); //version (0) and flags (none)
+                    //output.OutputDword(DWORD_BE(0x01000000)); //version (1) and flags (none)
 
                     output.OutputDword(fastHtonl(compositionOffsets.Num()));
                     for(UINT i=0; i<compositionOffsets.Num(); i++)
@@ -550,7 +698,7 @@ public:
                     }
                   PopBox(); //ctts
 
-                  SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 40, 0);
+                  SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 70, 0);
                   ProcessEvents();
 
                   PushBox(output, DWORD_BE('stsc')); //sample to chunk list
@@ -588,156 +736,6 @@ public:
                         output.OutputDword(fastHtonl(videoChunks.Num()));
                         for(UINT i=0; i<videoChunks.Num(); i++)
                             output.OutputDword(fastHtonl((DWORD)videoChunks[i]));
-                      PopBox(); //stco
-                  }
-                PopBox(); //stbl
-              PopBox(); //minf
-            PopBox(); //mdia
-          PopBox(); //trak
-
-          SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 50, 0);
-          ProcessEvents();
-
-          //------------------------------------------------------
-          // audio track
-          PushBox(output, DWORD_BE('trak'));
-            PushBox(output, DWORD_BE('tkhd')); //track header
-              output.OutputDword(DWORD_BE(0x0000000F)); //version (0) and flags (0xF)
-              output.OutputDword(macTime); //creation time
-              output.OutputDword(macTime); //modified time
-              output.OutputDword(DWORD_BE(2)); //track ID
-              output.OutputDword(0); //reserved
-              output.OutputDword(audioDuration); //duration (in time base units)
-              output.OutputQword(0); //reserved
-              output.OutputWord(0); //video layer (0)
-              output.OutputWord(WORD_BE(1)); //quicktime alternate track id
-              output.OutputWord(WORD_BE(0x0100)); //volume
-              output.OutputWord(0); //reserved
-              output.OutputDword(DWORD_BE(0x00010000)); output.OutputDword(DWORD_BE(0x00000000)); output.OutputDword(DWORD_BE(0x00000000)); //window matrix row 1 (1.0, 0.0, 0.0)
-              output.OutputDword(DWORD_BE(0x00000000)); output.OutputDword(DWORD_BE(0x00010000)); output.OutputDword(DWORD_BE(0x00000000)); //window matrix row 2 (0.0, 1.0, 0.0)
-              output.OutputDword(DWORD_BE(0x00000000)); output.OutputDword(DWORD_BE(0x00000000)); output.OutputDword(DWORD_BE(0x40000000)); //window matrix row 3 (0.0, 0.0, 16384.0)
-              output.OutputDword(0); //width (fixed point)
-              output.OutputDword(0); //height (fixed point)
-            PopBox(); //tkhd
-            PushBox(output, DWORD_BE('edts'));
-              PushBox(output, DWORD_BE('elst'));
-                output.OutputDword(0); //version and flags (none)
-                output.OutputDword(DWORD_BE(1)); //count
-                output.OutputDword(audioDuration); //duration
-                output.OutputDword(0); //start time
-                output.OutputDword(DWORD_BE(0x00010000)); //playback speed (1.0)
-              PopBox(); //elst
-            PopBox(); //tdst
-            PushBox(output, DWORD_BE('mdia'));
-              PushBox(output, DWORD_BE('mdhd'));
-                output.OutputDword(0); //version and flags (none)
-                output.OutputDword(macTime); //creation time
-                output.OutputDword(macTime); //modified time
-                output.OutputDword(DWORD_BE(44100)); //time scale
-                output.OutputDword(audioUnitDuration);
-                output.OutputDword(DWORD_BE(0x55c40000));
-              PopBox(); //mdhd
-              PushBox(output, DWORD_BE('hdlr'));
-                output.OutputDword(0); //version and flags (none)
-                output.OutputDword(0); //quicktime type (none)
-                output.OutputDword(DWORD_BE('soun')); //media type
-                output.OutputDword(0); //manufacturer reserved
-                output.OutputDword(0); //quicktime component reserved flags
-                output.OutputDword(0); //quicktime component reserved mask
-                output.Serialize((LPVOID)lpAudioTrack, (DWORD)strlen(lpAudioTrack)+1); //track name
-              PopBox(); //hdlr
-              PushBox(output, DWORD_BE('minf'));
-                PushBox(output, DWORD_BE('smhd'));
-                  output.OutputDword(0); //version and flags (none)
-                  output.OutputDword(0); //balance (fixed point)
-                PopBox(); //vdhd
-                PushBox(output, DWORD_BE('dinf'));
-                  PushBox(output, DWORD_BE('dref'));
-                    output.OutputDword(0); //version and flags (none)
-                    output.OutputDword(DWORD_BE(1)); //count
-                    PushBox(output, DWORD_BE('url '));
-                      output.OutputDword(DWORD_BE(0x00000001)); //version (0) and flags (1)
-                    PopBox(); //url
-                  PopBox(); //dref
-                PopBox(); //dinf
-                PushBox(output, DWORD_BE('stbl'));
-                  PushBox(output, DWORD_BE('stsd'));
-                    output.OutputDword(0); //version and flags (none)
-                    output.OutputDword(DWORD_BE(1)); //count
-                    PushBox(output, DWORD_BE('mp4a'));
-                      output.OutputDword(0); //reserved (6 bytes)
-                      output.OutputWord(0);
-                      output.OutputWord(WORD_BE(1)); //dref index
-                      output.OutputWord(0); //quicktime encoding version
-                      output.OutputWord(0); //quicktime encoding revision
-                      output.OutputDword(0); //quicktime audio encoding vendor
-                      output.OutputWord(WORD_BE(2)); //channels
-                      output.OutputWord(WORD_BE(16)); //sample size
-                      output.OutputWord(0); //quicktime audio compression id
-                      output.OutputWord(0); //quicktime audio packet size
-                      output.OutputDword(DWORD_BE(44100<<16)); //sample rate (fixed point)
-                      PushBox(output, DWORD_BE('esds'));
-                        output.OutputDword(0); //version and flags (none)
-                        output.OutputByte(3); //ES descriptor type
-                        output.OutputByte(0x80);
-                        output.OutputByte(0x80);
-                        output.OutputByte(0x80);
-                        output.OutputByte(esDescriptor.Num());
-                        output.Serialize((LPVOID)esDescriptor.Array(), esDescriptor.Num());
-                      PopBox();
-                    PopBox();
-                  PopBox(); //stsd
-                  PushBox(output, DWORD_BE('stts')); //list of keyframe (i-frame) IDs
-                    output.OutputDword(0); //version and flags (none)
-                    output.OutputDword(fastHtonl(audioDecodeTimes.Num()));
-                    for(UINT i=0; i<audioDecodeTimes.Num(); i++)
-                    {
-                        output.OutputDword(fastHtonl(audioDecodeTimes[i].count));
-                        output.OutputDword(fastHtonl(audioDecodeTimes[i].val));
-                    }
-                  PopBox(); //stss
-                  PushBox(output, DWORD_BE('stsc')); //sample to chunk list
-                    output.OutputDword(0); //version and flags (none)
-                    output.OutputDword(fastHtonl(audioSampleToChunk.Num()));
-                    for(UINT i=0; i<audioSampleToChunk.Num(); i++)
-                    {
-                        SampleToChunk &stc  = audioSampleToChunk[i];
-                        output.OutputDword(fastHtonl(stc.firstChunkID));
-                        output.OutputDword(fastHtonl(stc.samplesPerChunk));
-                        output.OutputDword(DWORD_BE(1));
-                    }
-                  PopBox(); //stsc
-
-                  SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 60, 0);
-                  ProcessEvents();
-
-                  PushBox(output, DWORD_BE('stsz')); //sample sizes
-                    output.OutputDword(0); //version and flags (none)
-                    output.OutputDword(0); //block size for all (0 if differing sizes)
-                    output.OutputDword(fastHtonl(audioFrames.Num()));
-                    for(UINT i=0; i<audioFrames.Num(); i++)
-                        output.OutputDword(fastHtonl(audioFrames[i].size));
-                  PopBox();
-
-                  SendMessage(GetDlgItem(hwndProgressDialog, IDC_PROGRESS1), PBM_SETPOS, 70, 0);
-                  ProcessEvents();
-
-                  if(audioChunks.Num() && audioChunks.Last() > 0xFFFFFFFFLL)
-                  {
-                      PushBox(output, DWORD_BE('co64')); //chunk offsets
-                      output.OutputDword(0); //version and flags (none)
-                      output.OutputDword(fastHtonl(audioChunks.Num()));
-                      for(UINT i=0; i<audioChunks.Num(); i++)
-                          output.OutputQword(fastHtonll(audioChunks[i]));
-                      PopBox(); //co64
-                  }
-                  else
-                  {
-                      PushBox(output, DWORD_BE('stco')); //chunk offsets
-                        output.OutputDword(0); //version and flags (none)
-                        output.OutputDword(fastHtonl(audioChunks.Num()));
-                        for(UINT i=0; i<audioChunks.Num(); i++)
-                            output.OutputDword(fastHtonl((DWORD)audioChunks[i]));
                       PopBox(); //stco
                   }
                 PopBox(); //stbl
@@ -803,11 +801,6 @@ public:
 
     virtual void AddPacket(BYTE *data, UINT size, DWORD timestamp, PacketType type)
     {
-        if(!bSentFirstVideoPacket && type != PacketType_Audio)
-        {
-            bSentFirstVideoPacket = true;
-        }
-
         UINT64 offset = fileOut.GetPos();
 
         if(type == PacketType_Audio)
@@ -829,6 +822,13 @@ public:
             audioFrame.fileOffset   = offset;
             audioFrame.size         = copySize;
             audioFrame.timestamp    = timestamp;
+
+            GetChunkInfo<MP4AudioFrameInfo>(audioFrame, audioFrames.Num(), audioChunks, audioSampleToChunk,
+                                            curAudioChunkOffset, connectedAudioSampleOffset, numAudioSamples);
+
+            if(audioFrames.Num())
+                GetAudioDecodeTime(audioFrames.Last(), false);
+
             audioFrames << audioFrame;
         }
         else
@@ -853,8 +853,18 @@ public:
             }
             else
             {
-                totalCopied = size-5;
-                fileOut.Serialize(data+5, totalCopied);
+                if (!bSentSEI) {
+                    DataPacket sei;
+                    App->GetVideoEncoder()->GetSEI(sei);
+
+                    fileOut.Serialize(sei.lpPacket, sei.size);
+                    totalCopied += sei.size;
+
+                    bSentSEI = true;
+                }
+
+                totalCopied += size-5;
+                fileOut.Serialize(data+5, size-5);
             }
 
             if(!videoFrames.Num() || timestamp != lastVideoTimestamp)
@@ -873,6 +883,13 @@ public:
                 frameInfo.size              = totalCopied;
                 frameInfo.timestamp         = timestamp;
                 frameInfo.compositionOffset = timeOffset;
+
+                GetChunkInfo<MP4VideoFrameInfo>(frameInfo, videoFrames.Num(), videoChunks, videoSampleToChunk,
+                                                curVideoChunkOffset, connectedVideoSampleOffset, numVideoSamples);
+
+                if(videoFrames.Num())
+                    GetVideoDecodeTime(frameInfo, false);
+
                 videoFrames << frameInfo;
             }
             else

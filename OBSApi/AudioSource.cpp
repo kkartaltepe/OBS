@@ -30,7 +30,7 @@ inline QWORD GetQWDif(QWORD val1, QWORD val2)
     return (val1 > val2) ? (val1-val2) : (val2-val1);
 }
 
-inline void MultiplyAudioBuffer(float *buffer, int totalFloats, float mulVal)
+void MultiplyAudioBuffer(float *buffer, int totalFloats, float mulVal)
 {
     float sum = 0.0f;
     int totalFloatsStore = totalFloats;
@@ -55,13 +55,18 @@ inline void MultiplyAudioBuffer(float *buffer, int totalFloats, float mulVal)
 }
 
 
+AudioSource::AudioSource()
+{
+    sourceVolume = 1.0f;
+}
+
 AudioSource::~AudioSource()
 {
     if(bResample)
         src_delete((SRC_STATE*)resampler);
 
     for(UINT i=0; i<audioSegments.Num(); i++)
-        audioSegments[i].ClearData();
+        delete audioSegments[i];
 }
 
 union TripleToLong
@@ -75,14 +80,24 @@ union TripleToLong
     };
 };
 
-void AudioSource::InitAudioData()
+void AudioSource::InitAudioData(bool bFloat, UINT channels, UINT samplesPerSec, UINT bitsPerSample, UINT blockSize, DWORD channelMask, bool bSmoothTimestamps)
 {
+    this->bFloat = bFloat;
+    this->bSmoothTimestamps = bSmoothTimestamps;
+    inputChannels = channels;
+    inputSamplesPerSec = samplesPerSec;
+    inputBitsPerSample = bitsPerSample;
+    inputBlockSize = blockSize;
+    inputChannelMask = channelMask;
+
+    //-----------------------------
+
     if(inputSamplesPerSec != 44100)
     {
         int errVal;
 
-        int converterType = API->UseHighQualityResampling() ? SRC_SINC_FASTEST : SRC_LINEAR;
-        resampler = src_new(converterType, 2, &errVal);//SRC_SINC_FASTEST//SRC_ZERO_ORDER_HOLD
+        int converterType = SRC_SINC_FASTEST;
+        resampler = src_new(converterType, 2, &errVal);
         if(!resampler)
             CrashError(TEXT("AudioSource::InitAudioData: Could not initiate resampler"));
 
@@ -160,8 +175,28 @@ const float dbMinus9    = 0.3535533905932738f;
 //not entirely sure if these are the correct coefficients for downmixing,
 //I'm fairly new to the whole multi speaker thing
 const float surroundMix = dbMinus3;
-const float centerMix   = dbMinus3;
-const float lowFreqMix  = 3.16227766f*dbMinus3;
+const float centerMix   = dbMinus6;
+const float lowFreqMix  = dbMinus3;
+
+const float surroundMix4 = dbMinus6;
+
+const float attn5dot1 = 1.0f / (1.0f + centerMix + surroundMix);
+const float attn4dotX = 1.0f / (1.0f + surroundMix4);
+
+void AudioSource::AddAudioSegment(AudioSegment *newSegment, float curVolume)
+{
+    for (UINT i=0; i<audioFilters.Num(); i++)
+    {
+        if (newSegment)
+            newSegment = audioFilters[i]->Process(newSegment);
+    }
+
+    if (newSegment)
+    {
+        MultiplyAudioBuffer(newSegment->audioData.Array(), newSegment->audioData.Num(), curVolume*sourceVolume);
+        audioSegments << newSegment;
+    }
+}
 
 UINT AudioSource::QueryAudio(float curVolume)
 {
@@ -299,10 +334,14 @@ UINT AudioSource::QueryAudio(float curVolume)
                 {
                     float left      = inputTemp[0];
                     float right     = inputTemp[1];
-                    float rear      = (inputTemp[2]+inputTemp[3])*surroundMix;
+                    float rearLeft  = inputTemp[2]*surroundMix4;
+                    float rearRight = inputTemp[3]*surroundMix4;
 
-                    *(outputTemp++) = left  - rear;
-                    *(outputTemp++) = right + rear;
+                    // When in doubt, use only left and right .... and rear left and rear right :) 
+                    // Same idea as with 5.1 downmix
+
+                    *(outputTemp++) = (left  + rearLeft)  * attn4dotX;
+                    *(outputTemp++) = (right + rearRight) * attn4dotX;
 
                     inputTemp  += 4;
                 }
@@ -316,10 +355,12 @@ UINT AudioSource::QueryAudio(float curVolume)
                 {
                     float left      = inputTemp[0];
                     float right     = inputTemp[1];
-                    float lfe       = inputTemp[2]*lowFreqMix;
+                   
+                    // Drop LFE since we don't need it
+                    //float lfe       = inputTemp[2]*lowFreqMix;
 
-                    *(outputTemp++) = left  + lfe;
-                    *(outputTemp++) = right + lfe;
+                    *(outputTemp++) = left;
+                    *(outputTemp++) = right;
 
                     inputTemp  += 3;
                 }
@@ -333,11 +374,17 @@ UINT AudioSource::QueryAudio(float curVolume)
                 {
                     float left      = inputTemp[0];
                     float right     = inputTemp[1];
-                    float lfe       = inputTemp[2]*lowFreqMix;
-                    float rear      = (inputTemp[3]+inputTemp[4])*surroundMix;
 
-                    *(outputTemp++) = left  + lfe - rear;
-                    *(outputTemp++) = right + lfe + rear;
+                    // Skip LFE , we don't really need it.
+                    //float lfe       = inputTemp[2];
+
+                    float rearLeft  = inputTemp[3]*surroundMix4;
+                    float rearRight = inputTemp[4]*surroundMix4;
+
+                    // Same idea as with 5.1 downmix
+
+                    *(outputTemp++) = (left  + rearLeft)  * attn4dotX;
+                    *(outputTemp++) = (right + rearRight) * attn4dotX;
 
                     inputTemp  += 5;
                 }
@@ -351,17 +398,22 @@ UINT AudioSource::QueryAudio(float curVolume)
                 {
                     float left      = inputTemp[0];
                     float right     = inputTemp[1];
-                    float center    = inputTemp[2]*centerMix;
-                    float rear      = inputTemp[3]*(surroundMix*dbMinus3);
+                    float frontCenter    = inputTemp[2];
+                    float rearCenter     = inputTemp[3];
+                    
+                    // When in doubt, use only left and right :) Seriously.
+                    // THIS NEEDS TO BE PROPERLY IMPLEMENTED!
 
-                    *(outputTemp++) = left  + center - rear;
-                    *(outputTemp++) = right + center + rear;
+                    *(outputTemp++) = left;
+                    *(outputTemp++) = right;
 
                     inputTemp  += 4;
                 }
             }
-            //don't think this will work for both
-            else if(inputChannelMask == KSAUDIO_SPEAKER_5POINT1)
+            // Both speakers configs share the same format, the difference is in rear speakers position 
+            // See: http://msdn.microsoft.com/en-us/library/windows/hardware/ff537083(v=vs.85).aspx
+            // Probably for KSAUDIO_SPEAKER_5POINT1_SURROUND we will need a different coefficient for rear left/right
+            else if(inputChannelMask == KSAUDIO_SPEAKER_5POINT1 || inputChannelMask == KSAUDIO_SPEAKER_5POINT1_SURROUND)
             {
                 UINT numFloats = numAudioFrames*6;
                 float *endTemp = inputTemp+numFloats;
@@ -371,37 +423,44 @@ UINT AudioSource::QueryAudio(float curVolume)
                     float left      = inputTemp[0];
                     float right     = inputTemp[1];
                     float center    = inputTemp[2]*centerMix;
-                    float lowFreq   = inputTemp[3]*lowFreqMix;
-                    float rear      = (inputTemp[4]+inputTemp[5])*surroundMix;
+                    
+                    //We don't need LFE channel so skip it (see below)
+                    //float lowFreq   = inputTemp[3]*lowFreqMix;
+                    
+                    float rearLeft  = inputTemp[4]*surroundMix;
+                    float rearRight = inputTemp[5]*surroundMix;
+                    
+                    // According to ITU-R  BS.775-1 recommendation, the downmix from a 3/2 source to stereo
+                    // is the following:
+                    // L = FL + k0*C + k1*RL
+                    // R = FR + k0*C + k1*RR
+                    // FL = front left
+                    // FR = front right
+                    // C  = center
+                    // RL = rear left
+                    // RR = rear right
+                    // k0 = centerMix   = dbMinus3 = 0.7071067811865476 [for k0 we can use dbMinus6 = 0.5 too, probably it's better]
+                    // k1 = surroundMix = dbMinus3 = 0.7071067811865476
 
-                    *(outputTemp++) = left  + center + lowFreq - rear;
-                    *(outputTemp++) = right + center + lowFreq + rear;
+                    // The output (L,R) can be out of (-1,1) domain so we attenuate it [ attn5dot1 = 1/(1 + centerMix + surroundMix) ]
+                    // Note: this method of downmixing is far from "perfect" (pretty sure it's not the correct way) but the resulting downmix is "okayish", at least no more bleeding ears.
+                    // (maybe have a look at http://forum.doom9.org/archive/index.php/t-148228.html too [ 5.1 -> stereo ] the approach seems almost the same [but different coefficients])
+
+                    
+                    // http://acousticsfreq.com/blog/wp-content/uploads/2012/01/ITU-R-BS775-1.pdf
+                    // http://ir.lib.nctu.edu.tw/bitstream/987654321/22934/1/030104001.pdf
+
+                    *(outputTemp++) = (left  + center  + rearLeft) * attn5dot1;
+                    *(outputTemp++) = (right + center  + rearRight) * attn5dot1;
 
                     inputTemp  += 6;
                 }
             }
-            //todo ------------------
-            //not sure if my 5.1/7.1 downmixes are correct
-            else if(inputChannelMask == KSAUDIO_SPEAKER_5POINT1_SURROUND)
-            {
-                UINT numFloats = numAudioFrames*6;
-                float *endTemp = inputTemp+numFloats;
 
-                while(inputTemp < endTemp)
-                {
-                    float left      = inputTemp[0];
-                    float right     = inputTemp[1];
-                    float center    = inputTemp[2]*centerMix;
-                    float lowFreq   = inputTemp[3]*lowFreqMix;
-                    float sideLeft  = inputTemp[4]*dbMinus3;
-                    float sideRight = inputTemp[5]*dbMinus3;
+            // According to http://msdn.microsoft.com/en-us/library/windows/hardware/ff537083(v=vs.85).aspx
+            // KSAUDIO_SPEAKER_7POINT1 is obsolete and no longer supported in Windows Vista and later versions of Windows
+            // Not sure what to do about it, meh , drop front left of center/front right of center -> 5.1 -> stereo; 
 
-                    *(outputTemp++) = left  + center + sideLeft  + lowFreq;
-                    *(outputTemp++) = right + center + sideRight + lowFreq;
-
-                    inputTemp  += 6;
-                }
-            }
             else if(inputChannelMask == KSAUDIO_SPEAKER_7POINT1)
             {
                 UINT numFloats = numAudioFrames*8;
@@ -411,18 +470,28 @@ UINT AudioSource::QueryAudio(float curVolume)
                 {
                     float left          = inputTemp[0];
                     float right         = inputTemp[1];
-                    float center        = inputTemp[2]*(centerMix*dbMinus3);
-                    float lowFreq       = inputTemp[3]*lowFreqMix;
-                    float rear          = (inputTemp[4]+inputTemp[5])*surroundMix;
-                    float centerLeft    = inputTemp[6]*dbMinus6;
-                    float centerRight   = inputTemp[7]*dbMinus6;
+                    
+                    float center        = inputTemp[2] * centerMix;
+                    
+                    // Drop LFE since we don't need it
+                    //float lowFreq       = inputTemp[3]*lowFreqMix;
+                    
+                    float rearLeft      = inputTemp[4] * surroundMix;
+                    float rearRight     = inputTemp[5] * surroundMix;
 
-                    *(outputTemp++) = left  + centerLeft  + center + lowFreq - rear;
-                    *(outputTemp++) = right + centerRight + center + lowFreq + rear;
+                    // Drop SPEAKER_FRONT_LEFT_OF_CENTER , SPEAKER_FRONT_RIGHT_OF_CENTER
+                    //float centerLeft    = inputTemp[6];
+                    //float centerRight   = inputTemp[7];
+                    
+                    // Downmix from 5.1 to stereo
+                    *(outputTemp++) = (left  + center  + rearLeft)  * attn5dot1;
+                    *(outputTemp++) = (right + center  + rearRight) * attn5dot1;
 
                     inputTemp  += 8;
                 }
             }
+
+            // Downmix to 5.1 (easy stuff) then downmix to stereo as done in KSAUDIO_SPEAKER_5POINT1
             else if(inputChannelMask == KSAUDIO_SPEAKER_7POINT1_SURROUND)
             {
                 UINT numFloats = numAudioFrames*8;
@@ -432,14 +501,23 @@ UINT AudioSource::QueryAudio(float curVolume)
                 {
                     float left      = inputTemp[0];
                     float right     = inputTemp[1];
-                    float center    = inputTemp[2]*centerMix;
-                    float lowFreq   = inputTemp[3]*lowFreqMix;
-                    float rear      = (inputTemp[4]+inputTemp[5])*(surroundMix*dbMinus3);
-                    float sideLeft  = inputTemp[6]*dbMinus6;
-                    float sideRight = inputTemp[7]*dbMinus6;
+                    float center    = inputTemp[2] * centerMix;
 
-                    *(outputTemp++) = left  + sideLeft + center + lowFreq - rear;
-                    *(outputTemp++) = right + sideLeft + center + lowFreq + rear;
+                    // Skip LFE we don't need it
+                    //float lowFreq   = inputTemp[3]*lowFreqMix;
+
+                    float rearLeft  = inputTemp[4];
+                    float rearRight = inputTemp[5];
+                    float sideLeft  = inputTemp[6];
+                    float sideRight = inputTemp[7];
+
+                    // combine the rear/side channels first , baaam! 5.1
+                    rearLeft  = (rearLeft  + sideLeft)  * 0.5f;
+                    rearRight = (rearRight + sideRight) * 0.5f;
+                    
+                    // downmix to stereo as in 5.1 case
+                    *(outputTemp++) = (left  + center + rearLeft  * surroundMix) * attn5dot1;
+                    *(outputTemp++) = (right + center + rearRight * surroundMix) * attn5dot1;
 
                     inputTemp  += 8;
                 }
@@ -498,13 +576,16 @@ UINT AudioSource::QueryAudio(float curVolume)
 
         float *newBuffer = (bResample) ? tempResampleBuffer.Array() : tempBuffer.Array();
 
-        if(storageBuffer.Num() == 0 && numAudioFrames == 441)
-        {
+        if (bSmoothTimestamps) {
             lastUsedTimestamp += 10;
 
             QWORD difVal = GetQWDif(newTimestamp, lastUsedTimestamp);
             if(difVal > 70)
+            {
+                //OSDebugOut(TEXT("----------------------------1\r\nlastUsedTimestamp before: %llu - device: %s\r\n"), lastUsedTimestamp, GetDeviceName());
                 lastUsedTimestamp = newTimestamp;
+                //OSDebugOut(TEXT("lastUsedTimestamp after: %llu\r\n"), lastUsedTimestamp);
+            }
 
             if(lastUsedTimestamp > lastSentTimestamp)
             {
@@ -512,68 +593,15 @@ UINT AudioSource::QueryAudio(float curVolume)
                 if(adjustVal < 10)
                     lastUsedTimestamp += 10-adjustVal;
 
-                AudioSegment &newSegment = *audioSegments.CreateNew();
-                newSegment.audioData.CopyArray(newBuffer, numAudioFrames*2);
-                newSegment.timestamp = lastUsedTimestamp;
-                MultiplyAudioBuffer(newSegment.audioData.Array(), numAudioFrames*2, curVolume);
+                AudioSegment *newSegment = new AudioSegment(newBuffer, numAudioFrames*2, lastUsedTimestamp);
+                AddAudioSegment(newSegment, curVolume*sourceVolume);
 
                 lastSentTimestamp = lastUsedTimestamp;
             }
-        }
-        else
-        {
-            UINT storedFrames = storageBuffer.Num();
-
-            storageBuffer.AppendArray(newBuffer, numAudioFrames*2);
-            if(storageBuffer.Num() >= (441*2))
-            {
-                lastUsedTimestamp += 10;
-
-                QWORD difVal = GetQWDif(newTimestamp, lastUsedTimestamp);
-                if(difVal > 70)
-                    lastUsedTimestamp = newTimestamp - (QWORD(storedFrames)/2*1000/44100);
-
-                //------------------------
-                // add new data
-
-                if(lastUsedTimestamp > lastSentTimestamp)
-                {
-                    QWORD adjustVal = (lastUsedTimestamp-lastSentTimestamp);
-                    if(adjustVal < 10)
-                        lastUsedTimestamp += 10-adjustVal;
-
-                    AudioSegment &newSegment = *audioSegments.CreateNew();
-                    newSegment.audioData.CopyArray(storageBuffer.Array(), (441*2));
-                    newSegment.timestamp = lastUsedTimestamp;
-                    MultiplyAudioBuffer(newSegment.audioData.Array(), 441*2, curVolume);
-
-                    storageBuffer.RemoveRange(0, (441*2));
-                }
-
-                //------------------------
-                // if still data pending (can happen)
-
-                while(storageBuffer.Num() >= (441*2))
-                {
-                    lastUsedTimestamp += 10;
-
-                    if(lastUsedTimestamp > lastSentTimestamp)
-                    {
-                        QWORD adjustVal = (lastUsedTimestamp-lastSentTimestamp);
-                        if(adjustVal < 10)
-                            lastUsedTimestamp += 10-adjustVal;
-
-                        AudioSegment &newSegment = *audioSegments.CreateNew();
-                        newSegment.audioData.CopyArray(storageBuffer.Array(), (441*2));
-                        storageBuffer.RemoveRange(0, (441*2));
-                        MultiplyAudioBuffer(newSegment.audioData.Array(), 441*2, curVolume);
-
-                        newSegment.timestamp = lastUsedTimestamp;
-
-                        lastSentTimestamp = lastUsedTimestamp;
-                    }
-                }
-            }
+        } else {
+           // OSDebugOut(TEXT("newTimestamp: %llu\r\n"), newTimestamp);
+            AudioSegment *newSegment = new AudioSegment(newBuffer, numAudioFrames*2, newTimestamp);
+            AddAudioSegment(newSegment, curVolume*sourceVolume);
         }
 
         //-----------------------------------------------------------------------------
@@ -588,7 +616,7 @@ bool AudioSource::GetEarliestTimestamp(QWORD &timestamp)
 {
     if(audioSegments.Num())
     {
-        timestamp = audioSegments[0].timestamp;
+        timestamp = audioSegments[0]->timestamp;
         return true;
     }
 
@@ -602,9 +630,11 @@ bool AudioSource::GetBuffer(float **buffer, UINT *numFrames, QWORD targetTimesta
 
     while(audioSegments.Num())
     {
-        if(audioSegments[0].timestamp < targetTimestamp)
+        if(audioSegments[0]->timestamp < targetTimestamp)
         {
-            audioSegments[0].audioData.Clear();
+            Log(TEXT("Audio timestamp for device '%s' was behind target timestamp by %llu!  Had to delete audio segment.\r\n"),
+                                                              GetDeviceName(), targetTimestamp-audioSegments[0]->timestamp);
+            delete audioSegments[0];
             audioSegments.Remove(0);
         }
         else
@@ -615,13 +645,15 @@ bool AudioSource::GetBuffer(float **buffer, UINT *numFrames, QWORD targetTimesta
     {
         bool bUseSegment = false;
 
-        AudioSegment &segment = audioSegments[0];
+        AudioSegment *segment = audioSegments[0];
 
-        QWORD difference = (segment.timestamp-targetTimestamp);
-        if(difference <= 10)
+        QWORD difference = (segment->timestamp-targetTimestamp);
+        if(difference <= 20)
         {
             //Log(TEXT("segment.timestamp: %llu, targetTimestamp: %llu"), segment.timestamp, targetTimestamp);
-            outputBuffer.TransferFrom(segment.audioData);
+            outputBuffer.TransferFrom(segment->audioData);
+
+            delete segment;
             audioSegments.Remove(0);
 
             bSuccess = true;
@@ -642,7 +674,7 @@ bool AudioSource::GetNewestFrame(float **buffer, UINT *numFrames)
     {
         if(audioSegments.Num())
         {
-            List<float> &data = audioSegments.Last().audioData;
+            List<float> &data = audioSegments.Last()->audioData;
             *buffer = data.Array();
             *numFrames = data.Num()/2;
             return true;
@@ -655,8 +687,27 @@ bool AudioSource::GetNewestFrame(float **buffer, UINT *numFrames)
 QWORD AudioSource::GetBufferedTime()
 {
     if(audioSegments.Num())
-        return audioSegments.Last().timestamp - audioSegments[0].timestamp;
+        return audioSegments.Last()->timestamp - audioSegments[0]->timestamp;
 
     return 0;
 }
 
+void AudioSource::StartCapture() {}
+void AudioSource::StopCapture() {}
+
+UINT AudioSource::GetChannelCount() const {return inputChannels;}
+UINT AudioSource::GetSamplesPerSec() const {return inputSamplesPerSec;}
+
+int  AudioSource::GetTimeOffset() const {return timeOffset;}
+void AudioSource::SetTimeOffset(int newOffset) {timeOffset = newOffset;}
+
+void AudioSource::SetVolume(float fVal) {sourceVolume = fabsf(fVal);}
+float AudioSource::GetVolume() const {return sourceVolume;}
+
+UINT AudioSource::NumAudioFilters() const {return audioFilters.Num();}
+AudioFilter* AudioSource::GetAudioFilter(UINT id) {if(audioFilters.Num() > id) return audioFilters[id]; return NULL;}
+
+void AudioSource::AddAudioFilter(AudioFilter *filter) {audioFilters << filter;}
+void AudioSource::InsertAudioFilter(UINT pos, AudioFilter *filter) {audioFilters.Insert(pos, filter);}
+void AudioSource::RemoveAudioFilter(AudioFilter *filter) {audioFilters.RemoveItem(filter);}
+void AudioSource::RemoveAudioFilter(UINT id) {if(audioFilters.Num() > id) audioFilters.Remove(id);}

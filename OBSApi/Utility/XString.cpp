@@ -334,8 +334,6 @@ String& String::operator+=(const String &str)
             lpString = (TSTR)Allocate((curLength+1)*sizeof(TCHAR));
             scpy(lpString, str.lpString);
         }
-
-        int strlenthingy = slen(lpString);
     }
     else
     {
@@ -661,7 +659,6 @@ String String::GetToken(int id, TCHAR token) const
 void String::GetTokenList(StringList &strList, TCHAR token, BOOL bIncludeEmpty) const
 {
     TSTR lpTemp = lpString;
-    UINT curTokenID = 0;
 
     do
     {
@@ -976,6 +973,7 @@ Serializer& operator<<(Serializer &s, String &str)
 {
     if(s.IsLoading())
     {
+        //FIXME: ???
         UINT utf8Length;
 
         s << utf8Length;
@@ -1006,9 +1004,11 @@ Serializer& operator<<(Serializer &s, String &str)
 
 BOOL STDCALL ValidFloatString(CTSTR lpStr)
 {
+    if(!lpStr || !*lpStr)
+        return FALSE;
+
     BOOL bFoundDecimal = FALSE;
     BOOL bFoundExp = FALSE;
-    BOOL bFoundEndThingy = FALSE;
 
     if((*lpStr == '-') || (*lpStr == '+'))
         ++lpStr;
@@ -1050,7 +1050,6 @@ BOOL STDCALL ValidFloatString(CTSTR lpStr)
             if(*++lpStr != 0)
                 return FALSE;
 
-            bFoundEndThingy = TRUE;
             break;
         }
         else if((*lpStr > '9') || (*lpStr < '0'))
@@ -1086,6 +1085,9 @@ BOOL STDCALL ValidIntString(CTSTR lpStr)
 
 BOOL DefinitelyFloatString(CTSTR lpStr)
 {
+    if(!lpStr || !*lpStr)
+        return FALSE;
+
     BOOL bFoundDecimal = FALSE;
     BOOL bFoundExp = FALSE;
     BOOL bFoundEndThingy = FALSE;

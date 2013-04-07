@@ -20,9 +20,6 @@
 #pragma once
 
 
-class GraphicsCaptureSource;
-
-
 class GraphicsCaptureSource : public ImageSource
 {
     GraphicsCaptureMethod *capture;
@@ -30,18 +27,23 @@ class GraphicsCaptureSource : public ImageSource
 
     XElement *data;
 
+    bool bUseHotkey;
+    DWORD hotkey, hotkeyID;
     String strWindowClass;
-    HWND hwndTarget, hwndCapture;
+
+    HWND hwndTarget, hwndCapture, hwndNextTarget;
     bool bCapturing, bErrorAcquiring, bFlip, bStretch, bIgnoreAspect, bCaptureMouse;
     UINT captureWaitCount;
     DWORD targetProcessID;
     UINT warningID;
 
+    int gamma;
+
     POINT cursorPos;
     int xHotspot, yHotspot;
     bool bMouseCaptured, bMouseDown;
     HCURSOR hCurrentCursor;
-    Shader *invertShader;
+    Shader *invertShader, *drawShader;
     Texture *cursorTexture;
 
     HANDLE hSignalRestart, hSignalEnd;
@@ -56,6 +58,8 @@ class GraphicsCaptureSource : public ImageSource
 
     void AttemptCapture();
 
+    static void CaptureHotkey(DWORD hotkey, GraphicsCaptureSource *capture, bool bDown);
+
 public:
     bool Init(XElement *data);
     ~GraphicsCaptureSource();
@@ -69,4 +73,6 @@ public:
     Vect2 GetSize() const;
 
     void UpdateSettings();
+
+    void SetInt(CTSTR lpName, int iVal);
 };

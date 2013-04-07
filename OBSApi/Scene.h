@@ -83,6 +83,7 @@ class BASE_EXPORT SceneItem
     Vect2 pos, size;
 
     bool bSelected;
+    bool bRender;
 
 public:
     ~SceneItem();
@@ -103,6 +104,7 @@ public:
     inline UINT GetID();
 
     void SetName(CTSTR lpNewName);
+    void SetRender(bool render);
 
     void Update();
 
@@ -136,6 +138,7 @@ class BASE_EXPORT Scene
 public:
     virtual ~Scene();
 
+    virtual SceneItem* InsertImageSource(UINT pos, XElement *sourceElement);
     virtual SceneItem* AddImageSource(XElement *sourceElement);
 
     virtual void RemoveImageSource(SceneItem *item);
@@ -160,12 +163,12 @@ public:
     {
         items.Clear();
 
-        for(UINT i=0; i<sceneItems.Num(); i++)
+        for(int i=sceneItems.Num() - 1; i >= 0; i--)
         {
             SceneItem *item = sceneItems[i];
             Vect2 upperLeft  = item->GetPos();
             Vect2 lowerRight = upperLeft+item->GetSize();
-            if(pos.x >= upperLeft.x && pos.y >= upperLeft.y && pos.x <= lowerRight.x && pos.y <= lowerRight.y)
+            if(item->bRender && pos.x >= upperLeft.x && pos.y >= upperLeft.y && pos.x <= lowerRight.x && pos.y <= lowerRight.y)
                 items << item;
         }
     }

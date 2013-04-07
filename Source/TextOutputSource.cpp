@@ -18,12 +18,19 @@
 
 
 #include "Main.h"
+
 #include <gdiplus.h>
 
 
-#define ClampInt(iVal, minVal, maxVal) \
-    if(iVal < minVal) iVal = minVal; \
-    else if(iVal > maxVal) iVal = maxVal;
+#define ClampVal(val, minVal, maxVal) \
+    if(val < minVal) val = minVal; \
+    else if(val > maxVal) val = maxVal;
+
+
+inline DWORD GetAlphaVal(UINT opacityLevel)
+{
+    return ((opacityLevel*255/100)&0xFF) << 24;
+}
 
 
 class TextOutputSource : public ImageSource
@@ -43,26 +50,29 @@ class TextOutputSource : public ImageSource
     int         size;
     DWORD       color;
     UINT        opacity;
+    UINT        globalOpacity;
     int         scrollSpeed;
     bool        bBold, bItalic, bUnderline, bVertical;
+
+    UINT        backgroundOpacity;
+    DWORD       backgroundColor;
 
     bool        bUseOutline;
     float       outlineSize;
     DWORD       outlineColor;
+    UINT        outlineOpacity;
 
     bool        bUseExtents;
     UINT        extentWidth, extentHeight;
+
     bool        bWrap;
     int         align;
 
     Vect2       baseSize;
     SIZE        textureSize;
 
-    String      strDirectory;
-    LPBYTE      changeBuffer;
     bool        bMonitoringFileChanges;
-    HANDLE      hDirectory;
-    OVERLAPPED  directoryChange;
+    OSFileChangeData *fileChangeMonitor;
 
     bool        bDoUpdate;
 
@@ -70,9 +80,7 @@ class TextOutputSource : public ImageSource
 
     XElement    *data;
 
-    inline DWORD GetAlphaVal()  {return ((opacity*255/100)&0xFF) << 24;}
-
-    void DrawOutlineText(Gdiplus::Graphics &graphics,
+    void DrawOutlineText(Gdiplus::Graphics *graphics,
                          Gdiplus::Font &font,
                          const Gdiplus::GraphicsPath &path,
                          const Gdiplus::StringFormat &format,
@@ -83,87 +91,26 @@ class TextOutputSource : public ImageSource
 
         outlinePath = path.Clone();
 
-        // Stuff to make things look pretty
-        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-        graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-
         // Outline color and size
-        Gdiplus::Pen pen(Gdiplus::Color(GetAlphaVal() | (outlineColor&0xFFFFFF)), outlineSize);
+        UINT tmpOpacity = (UINT)((((float)opacity * 0.01f) * ((float)outlineOpacity * 0.01f)) * 100.0f);
+        Gdiplus::Pen pen(Gdiplus::Color(GetAlphaVal(tmpOpacity) | (outlineColor&0xFFFFFF)), outlineSize);
         pen.SetLineJoin(Gdiplus::LineJoinRound);
-
+        
         // Widen the outline
-        outlinePath->Widen(&pen);
+        // It seems that Widen has a huge performance impact on DrawPath call, screw it! We're talking about freaking seconds in some extreme cases...
+        //outlinePath->Widen(&pen);
 
         // Draw the outline
-        graphics.DrawPath(&pen, outlinePath);
+        graphics->DrawPath(&pen, outlinePath);
 
         // Draw the text        
-        graphics.FillPath(brush, &path);
+        graphics->FillPath(brush, &path);
 
         delete outlinePath;
     }
 
-    void UpdateTexture()
+    HFONT GetFont()
     {
-        Gdiplus::Status stat;
-
-        if(bMonitoringFileChanges)
-        {
-            CancelIoEx(hDirectory, &directoryChange);
-            CloseHandle(hDirectory);
-
-            bMonitoringFileChanges = false;
-        }
-
-        if(mode == 0)
-            strCurrentText = strText;
-        else if(mode == 1)
-        {
-            XFile textFile;
-            if(strFile.IsValid() && textFile.Open(strFile, XFILE_READ | XFILE_SHARED, XFILE_OPENEXISTING))
-            {
-                textFile.ReadFileToString(strCurrentText);
-
-                strDirectory = strFile;
-                strDirectory.FindReplace(TEXT("\\"), TEXT("/"));
-                strDirectory = GetPathDirectory(strDirectory);
-                strDirectory.FindReplace(TEXT("/"), TEXT("\\"));
-                strDirectory << TEXT("\\");
-            }
-            else
-            {
-                strCurrentText = TEXT("");
-                AppWarning(TEXT("TextSource::UpdateTexture: could not open specified file (invalid file name or access violation)"));
-            }
-
-            if(!strCurrentText.IsValid())
-            {
-                strCurrentText = TEXT("");
-                AppWarning(TEXT("TextSource::UpdateTexture: invalid string returned by ReadFileToString (is the file UTF-8 or compatible ?!)"));
-            }
-
-            hDirectory = CreateFile(strDirectory, FILE_LIST_DIRECTORY, FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OVERLAPPED, NULL);
-            if(hDirectory != INVALID_HANDLE_VALUE)
-            {
-                DWORD test;
-                zero(&directoryChange, sizeof(directoryChange));
-
-                if(ReadDirectoryChangesW(hDirectory, changeBuffer, 2048, FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE, &test, &directoryChange, NULL))
-                    bMonitoringFileChanges = true;
-                else
-                {
-                    int err = GetLastError();
-                    CloseHandle(hDirectory);
-                }
-            }
-            else
-            {
-                int err = GetLastError();
-                nop();
-            }
-        }
-
         HFONT hFont = NULL;
 
         LOGFONT lf;
@@ -173,6 +120,7 @@ class TextOutputSource : public ImageSource
         lf.lfItalic = bItalic;
         lf.lfUnderline = bUnderline;
         lf.lfQuality = ANTIALIASED_QUALITY;
+
         if(strFont.IsValid())
         {
             scpy_n(lf.lfFaceName, strFont, 31);
@@ -186,38 +134,174 @@ class TextOutputSource : public ImageSource
             hFont = CreateFontIndirect(&lf);
         }
 
+        return hFont;
+    }
+
+    void UpdateCurrentText()
+    {
+        if(bMonitoringFileChanges)
+        {
+            OSMonitorFileDestroy(fileChangeMonitor);
+            fileChangeMonitor = NULL;
+
+            bMonitoringFileChanges = false;
+        }
+
+        if(mode == 0)
+            strCurrentText = strText;
+
+        else if(mode == 1 && strFile.IsValid())
+        {
+            XFile textFile;
+            if(textFile.Open(strFile, XFILE_READ | XFILE_SHARED, XFILE_OPENEXISTING))
+            {
+                textFile.ReadFileToString(strCurrentText);
+            }
+            else
+            {
+                strCurrentText = TEXT("");
+                AppWarning(TEXT("TextSource::UpdateTexture: could not open specified file (invalid file name or access violation)"));
+            }
+
+            if (fileChangeMonitor = OSMonitorFileStart (strFile))
+                bMonitoringFileChanges = true;
+        }
+        else
+            strCurrentText = TEXT("");
+    }
+
+    void SetStringFormat(Gdiplus::StringFormat &format)
+    {
+        UINT formatFlags;
+
+        formatFlags = Gdiplus::StringFormatFlagsNoFitBlackBox
+                    | Gdiplus::StringFormatFlagsMeasureTrailingSpaces;
+
+
+        if(bVertical)
+            formatFlags |= Gdiplus::StringFormatFlagsDirectionVertical
+                         | Gdiplus::StringFormatFlagsDirectionRightToLeft;
+
+        format.SetFormatFlags(formatFlags);
+        format.SetTrimming(Gdiplus::StringTrimmingWord);
+
+        if(bUseExtents && bWrap)
+            switch(align)
+            {
+                case 0:
+                    if(bVertical)
+                        format.SetLineAlignment(Gdiplus::StringAlignmentFar);
+                    else
+                        format.SetAlignment(Gdiplus::StringAlignmentNear);
+                    break;
+                case 1:
+                    if(bVertical)
+                        format.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+                    else
+                        format.SetAlignment(Gdiplus::StringAlignmentCenter);
+                    break;
+                case 2:
+                    if(bVertical)
+                        format.SetLineAlignment(Gdiplus::StringAlignmentNear);
+                    else
+                        format.SetAlignment(Gdiplus::StringAlignmentFar);
+                    break;
+            }
+        else if(bUseExtents && bVertical && !bWrap)
+                format.SetLineAlignment(Gdiplus::StringAlignmentFar);
+        else if(bVertical)
+                format.SetLineAlignment(Gdiplus::StringAlignmentFar);
+
+    }
+
+    void UpdateTexture()
+    {
+        HFONT hFont;
+        Gdiplus::Status stat;
+        Gdiplus::RectF layoutBox;
+        SIZE textSize;
+
+        Gdiplus::RectF boundingBox(0.0f, 0.0f, 32.0f, 32.0f);
+
+        UpdateCurrentText();
+
+        hFont = GetFont();
         if(!hFont)
             return;
 
-        SIZE textSize;
+        Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
+
+        SetStringFormat(format);
+
+        HDC hdc = CreateCompatibleDC(NULL);
+
+        Gdiplus::Font font(hdc, hFont);
+        Gdiplus::Graphics *graphics = new Gdiplus::Graphics(hdc);
+
+        graphics->SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+
+        if(strCurrentText.IsValid())
         {
-            HDC hDC = CreateCompatibleDC(NULL);
+            if(bUseExtents && bWrap)
             {
-                Gdiplus::Font font(hDC, hFont);
-                Gdiplus::Graphics graphics(hDC);
-                Gdiplus::StringFormat format;
+                layoutBox.X = layoutBox.Y = 0;
+                layoutBox.Width  = float(extentWidth);
+                layoutBox.Height = float(extentHeight);
 
-                if(bVertical)
-                    format.SetFormatFlags(Gdiplus::StringFormatFlagsDirectionVertical|Gdiplus::StringFormatFlagsDirectionRightToLeft|Gdiplus::StringFormatFlagsMeasureTrailingSpaces);
-                else
-                    format.SetFormatFlags(Gdiplus::StringFormatFlagsMeasureTrailingSpaces);
-
-                Gdiplus::RectF rcf;
-                stat = graphics.MeasureString(strCurrentText, -1, &font, Gdiplus::PointF(0.0f, 0.0f), &format, &rcf);
-                if(stat != Gdiplus::Ok)
-                    AppWarning(TEXT("graphics.MeasureString failed: %u"), (int)stat);
-
-                textSize.cx = long(rcf.Width+EPSILON);
-                textSize.cy = long(rcf.Height+EPSILON);
-
-                if(!textSize.cx || !textSize.cy)
+                if(bUseOutline)
                 {
-                    AppWarning(TEXT("TextSource::UpdateTexture: bad texture sizes apparently, very strange"));
-                    DeleteObject(hFont);
-                    return;
+                    //Note: since there's no path widening in DrawOutlineText the padding is half than what it was supposed to be.
+                    layoutBox.Width  -= outlineSize;
+                    layoutBox.Height -= outlineSize;
                 }
+
+                stat = graphics->MeasureString(strCurrentText, -1, &font, layoutBox, &format, &boundingBox);
+                if(stat != Gdiplus::Ok)
+                    AppWarning(TEXT("TextSource::UpdateTexture: Gdiplus::Graphics::MeasureString failed: %u"), (int)stat);
             }
-            DeleteDC(hDC);
+            else
+            {
+                stat = graphics->MeasureString(strCurrentText, -1, &font, Gdiplus::PointF(0.0f, 0.0f), &format, &boundingBox);
+                if(stat != Gdiplus::Ok)
+                    AppWarning(TEXT("TextSource::UpdateTexture: Gdiplus::Graphics::MeasureString failed: %u"), (int)stat);
+                if(bUseOutline)
+                {
+                    //Note: since there's no path widening in DrawOutlineText the padding is half than what it was supposed to be.
+                    boundingBox.Width  += outlineSize;
+                    boundingBox.Height += outlineSize;
+				}
+			}
+        }
+
+        delete graphics;
+
+        DeleteDC(hdc);
+        hdc = NULL;
+        DeleteObject(hFont);
+
+        if(bVertical)
+        {
+            if(boundingBox.Width<size)
+            {
+                textSize.cx = size;
+                boundingBox.Width = float(size);
+            }
+            else
+                textSize.cx = LONG(boundingBox.Width + EPSILON);
+
+            textSize.cy = LONG(boundingBox.Height + EPSILON);
+        }
+        else
+        {
+            if(boundingBox.Height<size)
+            {
+                textSize.cy = size;
+                boundingBox.Height = float(size);
+            }
+            else
+                textSize.cy = LONG(boundingBox.Height + EPSILON);
+
+            textSize.cx = LONG(boundingBox.Width + EPSILON);
         }
 
         if(bUseExtents)
@@ -236,35 +320,18 @@ class TextOutputSource : public ImageSource
             }
         }
 
-        textSize.cx++;
-        textSize.cy++;
-        textSize.cx &= 0xFFFFFFFE;
-        textSize.cy &= 0xFFFFFFFE;
+        //textSize.cx &= 0xFFFFFFFE;
+        //textSize.cy &= 0xFFFFFFFE;
 
-        ClampInt(textSize.cx, 32, 4096);
-        ClampInt(textSize.cy, 32, 4096);
+        textSize.cx += textSize.cx%2;
+        textSize.cy += textSize.cy%2;
 
-        if(textureSize.cx != textSize.cx || textureSize.cy != textSize.cy)
-        {
-            if(texture)
-            {
-                delete texture;
-                texture = NULL;
-            }
+        ClampVal(textSize.cx, 32, 8192);
+        ClampVal(textSize.cy, 32, 8192);
 
-            mcpy(&textureSize, &textSize, sizeof(textureSize));
-            texture = CreateGDITexture(textSize.cx, textSize.cy);
-        }
+        //----------------------------------------------------------------------
+        // write image
 
-        if(!texture)
-        {
-            AppWarning(TEXT("TextSource::UpdateTexture: could not create texture"));
-            DeleteObject(hFont);
-            return;
-        }
-
-        HDC hDC;
-        if(texture->GetDC(hDC))
         {
             HDC hTempDC = CreateCompatibleDC(NULL);
 
@@ -276,114 +343,100 @@ class TextOutputSource : public ImageSource
             BITMAPINFOHEADER &bih = bi.bmiHeader;
             bih.biSize = sizeof(bih);
             bih.biBitCount = 32;
-            bih.biWidth  = textureSize.cx;
-            bih.biHeight = textureSize.cy;
+            bih.biWidth  = textSize.cx;
+            bih.biHeight = textSize.cy;
             bih.biPlanes = 1;
 
             HBITMAP hBitmap = CreateDIBSection(hTempDC, &bi, DIB_RGB_COLORS, &lpBits, NULL, 0);
 
+            Gdiplus::Bitmap      bmp(textSize.cx, textSize.cy, 4*textSize.cx, PixelFormat32bppARGB, (BYTE*)lpBits);
+
+            graphics = new Gdiplus::Graphics(&bmp); 
+
+            Gdiplus::SolidBrush  *brush = new Gdiplus::SolidBrush(Gdiplus::Color(GetAlphaVal(opacity)|(color&0x00FFFFFF)));
+
+            DWORD bkColor;
+
+		    if(backgroundOpacity == 0 && scrollSpeed !=0)
+                bkColor = 1<<24 | (color&0x00FFFFFF);
+            else
+                bkColor = ((strCurrentText.IsValid() || bUseExtents) ? GetAlphaVal(backgroundOpacity) : GetAlphaVal(0)) | (backgroundColor&0x00FFFFFF);
+
+            if((textSize.cx > boundingBox.Width  || textSize.cy > boundingBox.Height) && !bUseExtents)
             {
-                Gdiplus::Bitmap      bmp(textureSize.cx, textureSize.cy, 4*textureSize.cx, PixelFormat32bppARGB, (BYTE*)lpBits);
-                Gdiplus::Graphics    graphics(&bmp); 
+                stat = graphics->Clear(Gdiplus::Color( 0x00000000));
+                if(stat != Gdiplus::Ok)
+                    AppWarning(TEXT("TextSource::UpdateTexture: Graphics::Clear failed: %u"), (int)stat);
 
-                //HomeWorld  -- we can use alpha for text color too :)
-                Gdiplus::SolidBrush  *brush = new Gdiplus::SolidBrush(Gdiplus::Color(0xFF000000|(color&0x00FFFFFF)));
-                Gdiplus::Font        font(hTempDC, hFont);
+                Gdiplus::SolidBrush *bkBrush = new Gdiplus::SolidBrush(Gdiplus::Color( bkColor ));
 
-                stat = graphics.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
-                if(stat != Gdiplus::Ok) AppWarning(TEXT("graphics.SetTextRenderingHint failed: %u"), (int)stat);
+                graphics->FillRectangle(bkBrush, boundingBox);
 
-                // HomeWorld --- clear context using a specified background color (we can drop source opacity since we can specify the alpha of background/text/outline)
-                stat = graphics.Clear(Gdiplus::Color(0x00000000));
+                delete bkBrush;
+            }
+            else
+            {
+                stat = graphics->Clear(Gdiplus::Color( bkColor ));
+                if(stat != Gdiplus::Ok)
+                    AppWarning(TEXT("TextSource::UpdateTexture: Graphics::Clear failed: %u"), (int)stat);
+            }
 
-                if(stat != Gdiplus::Ok) AppWarning(TEXT("graphics.Clear failed: %u"), (int)stat);
-
-                if(bUseExtents && bWrap)
+            graphics->SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+            graphics->SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+            graphics->SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            
+            if(strCurrentText.IsValid())
+            {
+                if(bUseOutline)
                 {
-                    Gdiplus::StringFormat format;
-                    Gdiplus::PointF pos(0.0f, 0.0f);
+                    boundingBox.Offset(outlineSize/2, outlineSize/2);
 
-                    switch(align)
-                    {
-                        case 0:
-                            if(bVertical)
-                                format.SetLineAlignment(Gdiplus::StringAlignmentFar);
-                            else
-                                format.SetAlignment(Gdiplus::StringAlignmentNear);
-                            break;
-                        case 1:
-                            if(bVertical)
-                                format.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-                            else
-                                format.SetAlignment(Gdiplus::StringAlignmentCenter);
-                            pos.X = float(textSize.cx/2);
-                            break;
-                        case 2:
-                            if(bVertical)
-                                format.SetLineAlignment(Gdiplus::StringAlignmentNear);
-                            else
-                                format.SetAlignment(Gdiplus::StringAlignmentFar);
-                            pos.X = float(textSize.cx);
-                            break;
-                    }
+                    Gdiplus::FontFamily fontFamily;
+                    Gdiplus::GraphicsPath path;
 
-                    if(bVertical)
-                        format.SetFormatFlags(Gdiplus::StringFormatFlagsDirectionVertical|Gdiplus::StringFormatFlagsDirectionRightToLeft);
+                    font.GetFamily(&fontFamily);
 
+                    path.AddString(strCurrentText, -1, &fontFamily, font.GetStyle(), font.GetSize(), boundingBox, &format);
 
-                    Gdiplus::RectF rcf(0.0f, 0.0f, float(textureSize.cx), float(textureSize.cy));
-
-                    if(bUseOutline)
-                    {
-                        Gdiplus::FontFamily fontFamily;
-                        font.GetFamily(&fontFamily);
-
-                        Gdiplus::GraphicsPath path;
-                        path.AddString(strCurrentText, -1, &fontFamily, font.GetStyle(), font.GetSize(), rcf, &format);
-
-                        DrawOutlineText(graphics, font, path, format, brush);
-                    }
-                    else
-                        graphics.DrawString(strCurrentText, -1, &font, rcf, &format, brush);
+                    DrawOutlineText(graphics, font, path, format, brush);
                 }
                 else
                 {
-                    Gdiplus::StringFormat format;
-
-                    if(bVertical)
-                        format.SetFormatFlags(Gdiplus::StringFormatFlagsDirectionVertical|Gdiplus::StringFormatFlagsDirectionRightToLeft);
-
-                    if(bUseOutline)
-                    {
-                        Gdiplus::FontFamily fontFamily;
-                        font.GetFamily(&fontFamily); 
-
-                        Gdiplus::GraphicsPath path;
-                        path.AddString(strCurrentText, -1, &fontFamily, font.GetStyle(), font.GetSize(), Gdiplus::PointF(bVertical ? float(textSize.cx) : 0.0f, float(textSize.cy - size) * 0.5f), &format);
-
-                        DrawOutlineText(graphics, font, path, format, brush);
-                    }
-                    else
-                    {
-                        stat = graphics.DrawString(strCurrentText, -1, &font, Gdiplus::PointF(bVertical ? float(textSize.cx) : 0.0f, float(textSize.cy - size) * 0.5f), &format, brush);
-                        if(stat != Gdiplus::Ok) AppWarning(TEXT("Hmm, DrawString failed: %u"), (int)stat);
-                    }
+                    stat = graphics->DrawString(strCurrentText, -1, &font, boundingBox, &format, brush);
+                    if(stat != Gdiplus::Ok)
+                        AppWarning(TEXT("TextSource::UpdateTexture: Graphics::DrawString failed: %u"), (int)stat);
                 }
-
-                delete brush;
             }
 
-            HBITMAP hbmpOld = (HBITMAP)SelectObject(hTempDC, hBitmap);
-            BitBlt(hDC, 0, 0, textureSize.cx, textureSize.cy, hTempDC, 0, 0, SRCCOPY);
+            delete brush;
+            delete graphics;
 
-            SelectObject(hTempDC, hbmpOld);
+            //----------------------------------------------------------------------
+            // upload texture
+
+            if(textureSize.cx != textSize.cx || textureSize.cy != textSize.cy)
+            {
+                if(texture)
+                {
+                    delete texture;
+                    texture = NULL;
+                }
+
+                mcpy(&textureSize, &textSize, sizeof(textureSize));
+                texture = CreateTexture(textSize.cx, textSize.cy, GS_BGRA, lpBits, FALSE, FALSE);
+            }
+            else if(texture)
+                texture->SetImage(lpBits, GS_IMAGEFORMAT_BGRA, 4*textSize.cx);
+
+            if(!texture)
+            {
+                AppWarning(TEXT("TextSource::UpdateTexture: could not create texture"));
+                DeleteObject(hFont);
+            }
+
             DeleteDC(hTempDC);
             DeleteObject(hBitmap);
-
-            texture->ReleaseDC();
         }
-
-        DeleteObject(hFont);
     }
 
 public:
@@ -399,9 +452,7 @@ public:
         si.borderColor = 0;
         si.filter = GS_FILTER_LINEAR;
         ss = CreateSamplerState(si);
-
-        changeBuffer = (LPBYTE)Allocate(2048);
-        zero(changeBuffer, 2048);
+        globalOpacity = 100;
 
         Log(TEXT("Using text output"));
     }
@@ -416,12 +467,9 @@ public:
 
         delete ss;
 
-        Free(changeBuffer);
-
         if(bMonitoringFileChanges)
         {
-            CancelIoEx(hDirectory, &directoryChange);
-            CloseHandle(hDirectory);
+            OSMonitorFileDestroy(fileChangeMonitor);
         }
     }
 
@@ -429,32 +477,8 @@ public:
     {
         if(bMonitoringFileChanges)
         {
-            if(HasOverlappedIoCompleted(&directoryChange))
-            {
-                bMonitoringFileChanges = false;
-
-                FILE_NOTIFY_INFORMATION *notify = (FILE_NOTIFY_INFORMATION*)changeBuffer;
-
-                String strFileName;
-                strFileName.SetLength(notify->FileNameLength);
-                scpy_n(strFileName, notify->FileName, notify->FileNameLength/2);
-                strFileName.KillSpaces();
-
-                String strFileChanged;
-                strFileChanged << strDirectory << strFileName;
-
-                if(strFileChanged.CompareI(strFile))
-                    bDoUpdate = true;
-
-                DWORD test;
-                zero(&directoryChange, sizeof(directoryChange));
-                zero(changeBuffer, 2048);
-
-                if(ReadDirectoryChangesW(hDirectory, changeBuffer, 2048, FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE, &test, &directoryChange, NULL))
-                    bMonitoringFileChanges = true;
-                else
-                    CloseHandle(hDirectory);
-            }
+            if (OSFileHasChanged(fileChangeMonitor))
+                bUpdateTexture = true;
         }
 
         if(bUpdateTexture)
@@ -466,9 +490,9 @@ public:
 
     void Tick(float fSeconds)
     {
-        if(scrollSpeed != 0)
+        if(scrollSpeed != 0 && texture)
         {
-            scrollValue += fSeconds*float(scrollSpeed)*0.01f;
+            scrollValue += fSeconds*float(scrollSpeed)/(bVertical?(-1.0f)*float(textureSize.cy):float(textureSize.cx));
             while(scrollValue > 1.0f)
                 scrollValue -= 1.0f;
             while(scrollValue < -1.0f)
@@ -523,7 +547,7 @@ public:
                 }
             }
 
-            DWORD alpha = DWORD(double(opacity)*2.55);
+            DWORD alpha = DWORD(double(globalOpacity)*2.55);
             DWORD outputColor = (alpha << 24) | 0xFFFFFF;
 
             if(scrollSpeed != 0)
@@ -547,10 +571,10 @@ public:
                 }
 
                 LoadSamplerState(ss);
-                DrawSpriteEx(texture, outputColor, pos.x, pos.y+newSize.y, pos.x+newSize.x, pos.y, ul.x, ul.y, lr.x, lr.y);
+                DrawSpriteEx(texture, outputColor, pos.x, pos.y, pos.x+newSize.x, pos.y+newSize.y, ul.x, ul.y, lr.x, lr.y);
             }
             else
-                DrawSprite(texture, outputColor, pos.x, pos.y+newSize.y, pos.x+newSize.x, pos.y);
+                DrawSprite(texture, outputColor, pos.x, pos.y, pos.x+newSize.x, pos.y+newSize.y);
 
             if(bUseExtents && !bWrap)
                 SetScissorRect(NULL);
@@ -586,9 +610,13 @@ public:
         baseSize.x  = data->GetFloat(TEXT("baseSizeCX"), 100);
         baseSize.y  = data->GetFloat(TEXT("baseSizeCY"), 100);
 
-        bUseOutline = data->GetInt(TEXT("useOutline")) != 0;
-        outlineColor= data->GetInt(TEXT("outlineColor"), 0xFFFFFF);
-        outlineSize = data->GetFloat(TEXT("outlineSize"), 2);
+        bUseOutline    = data->GetInt(TEXT("useOutline")) != 0;
+        outlineColor   = data->GetInt(TEXT("outlineColor"), 0xFFFFFF);
+        outlineSize    = data->GetFloat(TEXT("outlineSize"), 2);
+        outlineOpacity = data->GetInt(TEXT("outlineOpacity"), 100);
+
+        backgroundColor   = data->GetInt(TEXT("backgroundColor"), 0xFF000000);
+        backgroundOpacity = data->GetInt(TEXT("backgroundOpacity"), 0);
 
         bUpdateTexture = true;
     }
@@ -649,6 +677,12 @@ public:
             bUseOutline = iValue != 0;
         else if(scmpi(lpName, TEXT("outlineColor")) == 0)
             outlineColor = iValue;
+        else if(scmpi(lpName, TEXT("outlineOpacity")) == 0)
+            outlineOpacity = iValue;
+        else if(scmpi(lpName, TEXT("backgroundColor")) == 0)
+            backgroundColor = iValue;
+        else if(scmpi(lpName, TEXT("backgroundOpacity")) == 0)
+            backgroundOpacity = iValue;
 
         bUpdateTexture = true;
     }
@@ -697,7 +731,7 @@ void DoCancelStuff(HWND hwnd)
 {
     ConfigTextSourceInfo *configInfo = (ConfigTextSourceInfo*)GetWindowLongPtr(hwnd, DWLP_USER);
     ImageSource *source = API->GetSceneImageSource(configInfo->lpName);
-    XElement *data = configInfo->data;
+    //XElement *data = configInfo->data;
 
     if(source)
         source->UpdateSettings();
@@ -784,7 +818,7 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 SendMessage(GetDlgItem(hwnd, IDC_TEXTOPACITY), UDM_SETRANGE32, 0, 100);
                 SendMessage(GetDlgItem(hwnd, IDC_TEXTOPACITY), UDM_SETPOS32, 0, data->GetInt(TEXT("textOpacity"), 100));
 
-                SendMessage(GetDlgItem(hwnd, IDC_SCROLLSPEED), UDM_SETRANGE32, -100, 100);
+                SendMessage(GetDlgItem(hwnd, IDC_SCROLLSPEED), UDM_SETRANGE32, -4095, 4095);
                 SendMessage(GetDlgItem(hwnd, IDC_SCROLLSPEED), UDM_SETPOS32, 0, data->GetInt(TEXT("scrollSpeed"), 0));
 
                 SendMessage(GetDlgItem(hwnd, IDC_BOLD), BM_SETCHECK, data->GetInt(TEXT("bold"), 0) ? BST_CHECKED : BST_UNCHECKED, 0);
@@ -792,6 +826,13 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 SendMessage(GetDlgItem(hwnd, IDC_UNDERLINE), BM_SETCHECK, data->GetInt(TEXT("underline"), 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 
                 SendMessage(GetDlgItem(hwnd, IDC_VERTICALSCRIPT), BM_SETCHECK, data->GetInt(TEXT("vertical"), 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                //-----------------------------------------
+
+                CCSetColor(GetDlgItem(hwnd, IDC_BACKGROUNDCOLOR), data->GetInt(TEXT("backgroundColor"), 0xFF000000));
+
+                SendMessage(GetDlgItem(hwnd, IDC_BACKGROUNDOPACITY), UDM_SETRANGE32, 0, 100);
+                SendMessage(GetDlgItem(hwnd, IDC_BACKGROUNDOPACITY), UDM_SETPOS32, 0, data->GetInt(TEXT("backgroundOpacity"), 0));
 
                 //-----------------------------------------
 
@@ -806,6 +847,9 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 SendMessage(GetDlgItem(hwnd, IDC_OUTLINETHICKNESS), UDM_SETPOS32, 0, data->GetInt(TEXT("outlineSize"), 2));
 
                 CCSetColor(GetDlgItem(hwnd, IDC_OUTLINECOLOR), data->GetInt(TEXT("outlineColor"), 0xFFFFFFFF));
+
+                SendMessage(GetDlgItem(hwnd, IDC_OUTLINEOPACITY), UDM_SETRANGE32, 0, 100);
+                SendMessage(GetDlgItem(hwnd, IDC_OUTLINEOPACITY), UDM_SETPOS32, 0, data->GetInt(TEXT("outlineOpacity"), 100));
 
                 //-----------------------------------------
 
@@ -837,7 +881,7 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 SendMessage(hwndAlign, CB_ADDSTRING, 0, (LPARAM)Str("Sources.TextSource.Right"));
 
                 int align = data->GetInt(TEXT("align"), 0);
-                ClampInt(align, 0, 2);
+                ClampVal(align, 0, 2);
                 SendMessage(hwndAlign, CB_SETCURSEL, align, 0);
 
                 //-----------------------------------------
@@ -891,6 +935,7 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                     break;
 
                 case IDC_OUTLINECOLOR:
+                case IDC_BACKGROUNDCOLOR:
                 case IDC_COLOR:
                     if(bInitializedDialog)
                     {
@@ -903,8 +948,9 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                         {
                             switch(LOWORD(wParam))
                             {
-                                case IDC_OUTLINECOLOR:  source->SetInt(TEXT("outlineColor"), color); break;
-                                case IDC_COLOR:         source->SetInt(TEXT("color"), color); break;
+                                case IDC_OUTLINECOLOR:      source->SetInt(TEXT("outlineColor"), color); break;
+                                case IDC_BACKGROUNDCOLOR:   source->SetInt(TEXT("backgroundColor"), color); break;
+                                case IDC_COLOR:             source->SetInt(TEXT("color"), color); break;
                             }
                         }
                     }
@@ -913,7 +959,9 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                 case IDC_TEXTSIZE_EDIT:
                 case IDC_EXTENTWIDTH_EDIT:
                 case IDC_EXTENTHEIGHT_EDIT:
+                case IDC_BACKGROUNDOPACITY_EDIT:
                 case IDC_TEXTOPACITY_EDIT:
+                case IDC_OUTLINEOPACITY_EDIT:
                 case IDC_OUTLINETHICKNESS_EDIT:
                 case IDC_SCROLLSPEED_EDIT:
                     if(HIWORD(wParam) == EN_CHANGE && bInitializedDialog)
@@ -928,12 +976,14 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                         {
                             switch(LOWORD(wParam))
                             {
-                                case IDC_TEXTSIZE_EDIT:         source->SetInt(TEXT("fontSize"), val); break;
-                                case IDC_EXTENTWIDTH_EDIT:      source->SetInt(TEXT("extentWidth"), val); break;
-                                case IDC_EXTENTHEIGHT_EDIT:     source->SetInt(TEXT("extentHeight"), val); break;
-                                case IDC_TEXTOPACITY_EDIT:      source->SetInt(TEXT("textOpacity"), val); break;
-                                case IDC_OUTLINETHICKNESS_EDIT: source->SetFloat(TEXT("outlineSize"), (float)val); break;
-                                case IDC_SCROLLSPEED_EDIT:      source->SetInt(TEXT("scrollSpeed"), val); break;
+                                case IDC_TEXTSIZE_EDIT:             source->SetInt(TEXT("fontSize"), val); break;
+                                case IDC_EXTENTWIDTH_EDIT:          source->SetInt(TEXT("extentWidth"), val); break;
+                                case IDC_EXTENTHEIGHT_EDIT:         source->SetInt(TEXT("extentHeight"), val); break;
+                                case IDC_TEXTOPACITY_EDIT:          source->SetInt(TEXT("textOpacity"), val); break;
+                                case IDC_OUTLINEOPACITY_EDIT:       source->SetInt(TEXT("outlineOpacity"), val); break;
+                                case IDC_BACKGROUNDOPACITY_EDIT:    source->SetInt(TEXT("backgroundOpacity"), val); break;
+                                case IDC_OUTLINETHICKNESS_EDIT:     source->SetFloat(TEXT("outlineSize"), (float)val); break;
+                                case IDC_SCROLLSPEED_EDIT:          source->SetInt(TEXT("scrollSpeed"), val); break;
                             }
                         }
                     }
@@ -989,6 +1039,8 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                             EnableWindow(GetDlgItem(hwnd, IDC_OUTLINETHICKNESS_EDIT), bChecked);
                             EnableWindow(GetDlgItem(hwnd, IDC_OUTLINETHICKNESS), bChecked);
                             EnableWindow(GetDlgItem(hwnd, IDC_OUTLINECOLOR), bChecked);
+                            EnableWindow(GetDlgItem(hwnd, IDC_OUTLINEOPACITY_EDIT), bChecked);
+                            EnableWindow(GetDlgItem(hwnd, IDC_OUTLINEOPACITY), bChecked);
                         }
                     }
                     break;
@@ -1097,6 +1149,9 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                         XElement *data = configInfo->data;
 
                         BOOL bUseTextExtents = SendMessage(GetDlgItem(hwnd, IDC_USETEXTEXTENTS), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        BOOL bUseOutline = SendMessage(GetDlgItem(hwnd, IDC_USEOUTLINE), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        float outlineSize = (float)SendMessage(GetDlgItem(hwnd, IDC_OUTLINETHICKNESS), UDM_GETPOS32, 0, 0);
+
                         int mode = SendMessage(GetDlgItem(hwnd, IDC_USEFILE), BM_GETCHECK, 0, 0) == BST_CHECKED;
 
                         String strText = GetEditText(GetDlgItem(hwnd, IDC_TEXT));
@@ -1167,7 +1222,7 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                             HDC hDC = CreateCompatibleDC(NULL);
 
                             Gdiplus::Font font(hDC, &lf);
-                            
+
                             if(!font.IsAvailable())
                             {
                                 String strError = Str("Sources.TextSource.FontNotFound");
@@ -1179,14 +1234,39 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
 
                             {
                                 Gdiplus::Graphics graphics(hDC);
-                                Gdiplus::StringFormat format;
+                                Gdiplus::StringFormat format(Gdiplus::StringFormat::GenericTypographic());
+
+                                UINT formatFlags;
+
+                                formatFlags = Gdiplus::StringFormatFlagsNoFitBlackBox
+                                            | Gdiplus::StringFormatFlagsMeasureTrailingSpaces;
 
                                 if(bVertical)
-                                    format.SetFormatFlags(Gdiplus::StringFormatFlagsDirectionVertical|Gdiplus::StringFormatFlagsDirectionRightToLeft|Gdiplus::StringFormatFlagsMeasureTrailingSpaces);
+                                    formatFlags |= Gdiplus::StringFormatFlagsDirectionVertical
+                                                 | Gdiplus::StringFormatFlagsDirectionRightToLeft;
+
+                                format.SetFormatFlags(formatFlags);
+                                format.SetTrimming(Gdiplus::StringTrimmingWord);
 
                                 Gdiplus::RectF rcf;
                                 graphics.MeasureString(strOutputText, -1, &font, Gdiplus::PointF(0.0f, 0.0f), &format, &rcf);
 
+                                if(bUseOutline)
+                                {
+                                    rcf.Height += outlineSize;
+                                    rcf.Width  += outlineSize;
+                                }
+
+                                if(bVertical)
+                                {
+                                    if(rcf.Width<fontSize)
+                                        rcf.Width = (float)fontSize;
+                                }
+                                else
+                                {
+                                    if(rcf.Height<fontSize)
+                                        rcf.Height = (float)fontSize;
+                                }
                                 configInfo->cx = MAX(rcf.Width,  32.0f);
                                 configInfo->cy = MAX(rcf.Height, 32.0f);
                             }
@@ -1208,9 +1288,13 @@ INT_PTR CALLBACK ConfigureTextProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
                         data->SetInt(TEXT("wrap"), SendMessage(GetDlgItem(hwnd, IDC_WRAP), BM_GETCHECK, 0, 0) == BST_CHECKED);
                         data->SetInt(TEXT("underline"), SendMessage(GetDlgItem(hwnd, IDC_UNDERLINE), BM_GETCHECK, 0, 0) == BST_CHECKED);
 
-                        data->SetInt(TEXT("useOutline"), SendMessage(GetDlgItem(hwnd, IDC_USEOUTLINE), BM_GETCHECK, 0, 0) == BST_CHECKED);
+                        data->SetInt(TEXT("backgroundColor"), CCGetColor(GetDlgItem(hwnd, IDC_BACKGROUNDCOLOR)));
+                        data->SetInt(TEXT("backgroundOpacity"), (UINT)SendMessage(GetDlgItem(hwnd, IDC_BACKGROUNDOPACITY), UDM_GETPOS32, 0, 0));
+
+                        data->SetInt(TEXT("useOutline"), bUseOutline);
                         data->SetInt(TEXT("outlineColor"), CCGetColor(GetDlgItem(hwnd, IDC_OUTLINECOLOR)));
-                        data->SetFloat(TEXT("outlineSize"), (float)SendMessage(GetDlgItem(hwnd, IDC_OUTLINETHICKNESS), UDM_GETPOS32, 0, 0));
+                        data->SetFloat(TEXT("outlineSize"), outlineSize);
+                        data->SetInt(TEXT("outlineOpacity"), (UINT)SendMessage(GetDlgItem(hwnd, IDC_OUTLINEOPACITY), UDM_GETPOS32, 0, 0));
 
                         data->SetInt(TEXT("useTextExtents"), bUseTextExtents);
                         data->SetInt(TEXT("extentWidth"), extentWidth);

@@ -1,36 +1,13 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="Source">
-      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
-    </Filter>
-    <Filter Include="Headers">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
-    </Filter>
-    <Filter Include="Resources">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav</Extensions>
-    </Filter>
-    <Filter Include="Utility">
-      <UniqueIdentifier>{b2e2acf9-9714-401d-b950-6e7af03e9505}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Utility\Source">
-      <UniqueIdentifier>{53abeead-d56e-4189-bf19-83e13d34d529}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="Utility\Headers">
-      <UniqueIdentifier>{21041f43-a4d4-45a1-9150-5c9cec43d902}</UniqueIdentifier>
-    </Filter>
-  </ItemGroup>
-  <ItemGroup>
+    <ClCompile Include="APIDefs.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
     <ClCompile Include="AudioSource.cpp">
       <Filter>Source</Filter>
     </ClCompile>
     <ClCompile Include="ColorControl.cpp">
-      <Filter>Source</Filter>
-    </ClCompile>
-    <ClCompile Include="GraphicsSystem.cpp">
       <Filter>Source</Filter>
     </ClCompile>
     <ClCompile Include="HotkeyControlEx.cpp">
@@ -39,10 +16,22 @@
     <ClCompile Include="OBSApi.cpp">
       <Filter>Source</Filter>
     </ClCompile>
+    <ClCompile Include="GraphicsSystem.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="VolumeMeter.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="VolumeControl.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
     <ClCompile Include="Scene.cpp">
       <Filter>Source</Filter>
     </ClCompile>
     <ClCompile Include="Utility\ConfigFile.cpp">
+      <Filter>Utility\Source</Filter>
+    </ClCompile>
+    <ClCompile Include="Utility\XTLocalization.cpp">
       <Filter>Utility\Source</Filter>
     </ClCompile>
     <ClCompile Include="Utility\DebugAlloc.cpp">
@@ -75,30 +64,36 @@
     <ClCompile Include="Utility\XT_Windows.cpp">
       <Filter>Utility\Source</Filter>
     </ClCompile>
-    <ClCompile Include="Utility\XTLocalization.cpp">
-      <Filter>Utility\Source</Filter>
+    <ClCompile Include="SettingsPane.cpp">
+      <Filter>Source</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="APIInterface.h">
+    <ClInclude Include="ColorControl.h">
       <Filter>Headers</Filter>
     </ClInclude>
     <ClInclude Include="AudioSource.h">
       <Filter>Headers</Filter>
     </ClInclude>
-    <ClInclude Include="ColorControl.h">
+    <ClInclude Include="AudioFilter.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="APIInterface.h">
       <Filter>Headers</Filter>
     </ClInclude>
     <ClInclude Include="GraphicsSystem.h">
-      <Filter>Headers</Filter>
-    </ClInclude>
-    <ClInclude Include="HotkeyControlEx.h">
       <Filter>Headers</Filter>
     </ClInclude>
     <ClInclude Include="OBSApi.h">
       <Filter>Headers</Filter>
     </ClInclude>
     <ClInclude Include="Scene.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="VolumeMeter.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="VolumeControl.h">
       <Filter>Headers</Filter>
     </ClInclude>
     <ClInclude Include="Utility\Alloc.h">
@@ -114,6 +109,9 @@
       <Filter>Utility\Headers</Filter>
     </ClInclude>
     <ClInclude Include="Utility\FastAlloc.h">
+      <Filter>Utility\Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="HotkeyControlEx.h">
       <Filter>Utility\Headers</Filter>
     </ClInclude>
     <ClInclude Include="Utility\Inline.h">
@@ -152,5 +150,29 @@
     <ClInclude Include="Utility\XTLocalization.h">
       <Filter>Utility\Headers</Filter>
     </ClInclude>
+    <ClInclude Include="SettingsPane.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source">
+      <UniqueIdentifier>{ebd85662-234c-431a-bd43-a28cbe7fd3dc}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Headers">
+      <UniqueIdentifier>{da761293-0967-4901-9a8e-a587ac2a4599}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="Utility">
+      <UniqueIdentifier>{88bebac1-7d10-48ff-9d34-689b04181ac5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Utility\Source">
+      <UniqueIdentifier>{0c983f30-fef0-4755-b9b5-e93d87239460}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Utility\Headers">
+      <UniqueIdentifier>{d0560106-adb4-4e7a-9d24-2e1ec753ca95}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
   </ItemGroup>
 </Project>

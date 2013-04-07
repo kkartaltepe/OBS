@@ -22,6 +22,8 @@
 #define WINVER         0x0600
 #define _WIN32_WINDOWS 0x0600
 #define _WIN32_WINNT   0x0600
+#define NTDDI_VERSION  NTDDI_VISTASP1
+
 #define WIN32_LEAN_AND_MEAN
 #define ISOLATION_AWARE_ENABLED 1
 #include <windows.h>
@@ -40,10 +42,11 @@ BASE_EXPORT void LocalizeWindow(HWND hwnd, LocaleStringLookup *lookup=NULL);
 BASE_EXPORT void LocalizeMenu(HMENU hMenu, LocaleStringLookup *lookup=NULL);
 
 BASE_EXPORT String GetLBText(HWND hwndList, UINT id=LB_ERR);
+BASE_EXPORT String GetLVText(HWND hwndList, UINT id);
 BASE_EXPORT String GetCBText(HWND hwndCombo, UINT id=CB_ERR);
 BASE_EXPORT String GetEditText(HWND hwndEdit);
 
-BASE_EXPORT LPBYTE GetCursorData(HICON hIcon, ICONINFO &ii, UINT &size);
+BASE_EXPORT LPBYTE GetCursorData(HICON hIcon, ICONINFO &ii, UINT &width, UINT &height);
 
 
 #define SafeReleaseLogRef(var) if(var) {ULONG chi = var->Release(); OSDebugOut(TEXT("releasing %s, %d refs were left\r\n"), L#var, chi); var = NULL;}
@@ -97,11 +100,20 @@ inline BOOL CloseDouble(double f1, double f2, double precision=0.001)
     return fabs(f1-f2) <= precision;
 }
 
+// this actually can't work without a 128bit integer
+// ..however it -can- work with doubles, and should still be accurate
+BASE_EXPORT QWORD GetQPCTime100NS();
+BASE_EXPORT QWORD GetQPCTimeMS();
+
 //-------------------------------------------
 
 #include "GraphicsSystem.h"
 #include "Scene.h"
+#include "SettingsPane.h"
 #include "APIInterface.h"
+#include "AudioFilter.h"
 #include "AudioSource.h"
 #include "HotkeyControlEx.h"
 #include "ColorControl.h"
+#include "VolumeControl.h"
+#include "VolumeMeter.h"

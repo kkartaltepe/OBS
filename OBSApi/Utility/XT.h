@@ -64,9 +64,12 @@
 //-----------------------------------------
 //OS-independant functions
 //-----------------------------------------
+class StringList;
+class String;
+
 struct OSFindData
 {
-    TCHAR fileName[512];
+    TCHAR fileName[260];
     BOOL bDirectory;
     BOOL bHidden;
 };
@@ -79,8 +82,7 @@ struct XRect
     int cy;
 };
 
-class StringList;
-class String;
+struct OSFileChangeData;
 
 #define WAIT_INFINITE 0xFFFFFFFF
 
@@ -97,6 +99,11 @@ BASE_EXPORT BOOL   STDCALL OSCopyFile(CTSTR lpFileDest, CTSTR lpFileSrc);
 BASE_EXPORT BOOL   STDCALL OSCreateDirectory(CTSTR lpDirectory);
 BASE_EXPORT BOOL   STDCALL OSSetCurrentDirectory(CTSTR lpDirectory);
 BASE_EXPORT BOOL   STDCALL OSFileExists(CTSTR lpFile);
+
+BASE_EXPORT OSFileChangeData * STDCALL OSMonitorFileStart(String path);
+BASE_EXPORT BOOL   STDCALL OSFileHasChanged (OSFileChangeData *data);
+BASE_EXPORT VOID   STDCALL OSMonitorFileDestroy (OSFileChangeData *data);
+
 
 BASE_EXPORT BOOL   STDCALL OSCreateMainWindow(int x, int y, int cx, int cy);
 BASE_EXPORT void   STDCALL OSDestroyMainWindow();
@@ -121,8 +128,9 @@ BASE_EXPORT DEFPROC STDCALL OSGetProcAddress(HANDLE hLibrary, LPCSTR lpProcedure
 BASE_EXPORT void   STDCALL OSFreeLibrary(HANDLE hLibrary);
 
 BASE_EXPORT void   STDCALL OSSleep(DWORD dwMSeconds);
-BASE_EXPORT void   STDCALL OSSubMillisecondSleep(float fMSeconds);
-BASE_EXPORT void   STDCALL OSMicrosecondSleep(QWORD qwMicroseconds);
+BASE_EXPORT void   STDCALL OSSleepSubMillisecond(double fMSeconds);
+BASE_EXPORT void   STDCALL OSSleepMicrosecond(QWORD qwMicroseconds);
+BASE_EXPORT void   STDCALL OSSleep100NS(QWORD qw100NSTime); //why
 
 BASE_EXPORT int    STDCALL OSGetVersion();
 BASE_EXPORT int    STDCALL OSGetTotalCores();
@@ -149,6 +157,8 @@ BASE_EXPORT void __cdecl   OSMessageBox(const TCHAR *format, ...);
 BASE_EXPORT BOOL   STDCALL OSDebuggerPresent();
 BASE_EXPORT void __cdecl   OSDebugOutva(const TCHAR *format, va_list argptr);
 BASE_EXPORT void __cdecl   OSDebugOut(const TCHAR *format, ...);
+
+BASE_EXPORT CTSTR STDCALL  OSGetErrorString(DWORD errorCode);
 
 BASE_EXPORT BOOL   STDCALL OSGetLoadedModuleList(HANDLE hProcess, StringList &ModuleList);
 BASE_EXPORT BOOL   STDCALL OSIncompatibleModulesLoaded();

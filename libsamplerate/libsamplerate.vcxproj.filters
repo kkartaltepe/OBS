@@ -1,21 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="Source">
-      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
-    </Filter>
-    <Filter Include="Headers">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
-    </Filter>
-    <Filter Include="Resources">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav</Extensions>
-    </Filter>
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="samplerate.c">
+    <ClCompile Include="src_zoh.c">
       <Filter>Source</Filter>
     </ClCompile>
     <ClCompile Include="src_linear.c">
@@ -24,12 +10,15 @@
     <ClCompile Include="src_sinc.c">
       <Filter>Source</Filter>
     </ClCompile>
-    <ClCompile Include="src_zoh.c">
+    <ClCompile Include="samplerate.c">
       <Filter>Source</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="common.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="samplerate.h">
       <Filter>Headers</Filter>
     </ClInclude>
     <ClInclude Include="config.h">
@@ -47,8 +36,16 @@
     <ClInclude Include="mid_qual_coeffs.h">
       <Filter>Headers</Filter>
     </ClInclude>
-    <ClInclude Include="samplerate.h">
-      <Filter>Headers</Filter>
-    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Headers">
+      <UniqueIdentifier>{358b26fc-b1ef-4294-a9cc-d6a64be4ba77}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source">
+      <UniqueIdentifier>{f23ee9cc-d36b-453e-9cbc-6ac40131f1e6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Resources">
+      <UniqueIdentifier>{f3ed8158-880e-4aa4-ac5e-c82086a24375}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
 </Project>

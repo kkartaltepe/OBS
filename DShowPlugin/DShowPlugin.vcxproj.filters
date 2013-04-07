@@ -14,11 +14,14 @@
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav</Extensions>
     </Filter>
     <Filter Include="Shaders">
-      <UniqueIdentifier>{d72e33f6-8adb-4874-9d70-54933fa21d59}</UniqueIdentifier>
+      <UniqueIdentifier>{13c7e79e-dcbc-4157-af5a-79bbe67971b0}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="CaptureFilter.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="DeviceAudio.cpp">
       <Filter>Source</Filter>
     </ClCompile>
     <ClCompile Include="DeviceSource.cpp">
@@ -31,9 +34,6 @@
       <Filter>Source</Filter>
     </ClCompile>
     <ClCompile Include="MediaInfoStuff.cpp">
-      <Filter>Source</Filter>
-    </ClCompile>
-    <ClCompile Include="DeviceAudio.cpp">
       <Filter>Source</Filter>
     </ClCompile>
   </ItemGroup>

@@ -42,11 +42,19 @@ class DesktopImageSource : public ImageSource
 
     UINT     warningID;
 
-    bool     bUseColorKey;
+    bool     bUseColorKey, bUsePointFiltering;
     DWORD    keyColor;
     UINT     keySimilarity, keyBlend;
 
     UINT     opacity;
+    int      gamma;
+
+    //-------------------------
+    // stuff for compatibility mode
+    bool     bCompatibilityMode;
+    HDC      hdcCompatible;
+    HBITMAP  hbmpCompatible, hbmpOld;
+    BYTE     *captureBits;
 
     //-------------------------
     // win 8 capture stuff
@@ -93,6 +101,13 @@ public:
         delete cursorTexture;
         delete alphaIgnoreShader;
         delete colorKeyShader;
+
+        if(bCompatibilityMode)
+        {
+            SelectObject(hdcCompatible, hbmpOld);
+            DeleteDC(hdcCompatible);
+            DeleteObject(hbmpCompatible);
+        }
     }
 
     void Tick(float fSeconds)
@@ -117,8 +132,6 @@ public:
 
         if(duplicator)
         {
-            Texture *newTex = NULL;
-
             switch(duplicator->AquireNextFrame(0))
             {
                 case DuplicatorInfo_Lost:
@@ -176,11 +189,11 @@ public:
                                 xHotspot = int(ii.xHotspot);
                                 yHotspot = int(ii.yHotspot);
 
-                                UINT size;
-                                LPBYTE lpData = GetCursorData(hIcon, ii, size);
+                                UINT width, height;
+                                LPBYTE lpData = GetCursorData(hIcon, ii, width, height);
                                 if(lpData)
                                 {
-                                    cursorTexture = CreateTexture(size, size, GS_BGRA, lpData, FALSE);
+                                    cursorTexture = CreateTexture(width, height, GS_BGRA, lpData, FALSE);
                                     if(cursorTexture)
                                         bMouseCaptured = true;
 
@@ -199,6 +212,47 @@ public:
         }
     }
 
+    HDC GetCurrentHDC()
+    {
+        HDC hDC = NULL;
+
+        Texture *captureTexture = renderTextures[curCaptureTexture];
+
+        if(bCompatibilityMode)
+        {
+            hDC = hdcCompatible;
+            //zero(captureBits, width*height*4);
+        }
+        else if(captureTexture)
+            captureTexture->GetDC(hDC);
+
+        return hDC;
+    }
+
+    void ReleaseCurrentHDC(HDC hDC)
+    {
+        Texture *captureTexture = renderTextures[curCaptureTexture];
+
+        if(!bCompatibilityMode)
+            captureTexture->ReleaseDC();
+    }
+
+    void EndPreprocess()
+    {
+        if(bCompatibilityMode)
+        {
+            renderTextures[0]->SetImage(captureBits, GS_IMAGEFORMAT_BGRA, width*4);
+            lastRendered = renderTextures[0];
+        }
+        else
+        {
+            lastRendered = renderTextures[curCaptureTexture];
+
+            if(++curCaptureTexture == NUM_CAPTURE_TEXTURES)
+                curCaptureTexture = 0;
+        }
+    }
+
     void Preprocess()
     {
         if(bWindows8MonitorCapture)
@@ -207,10 +261,8 @@ public:
             return;
         }
 
-        Texture *captureTexture = renderTextures[curCaptureTexture];
-
         HDC hDC;
-        if(captureTexture && captureTexture->GetDC(hDC))
+        if(hDC = GetCurrentHDC())
         {
             //----------------------------------------------------------
             // capture screen
@@ -222,7 +274,7 @@ public:
 
             bMouseCaptured = bCaptureMouse && GetCursorInfo(&ci);
 
-            bool bWindowMinimized = false, bWindowNotFound = false;
+            bool bWindowNotFound = false;
             HWND hwndCapture = NULL;
             if(captureType == 1)
             {
@@ -254,7 +306,7 @@ public:
                     bWindowNotFound = true;
                 if(hwndCapture && (IsIconic(hwndCapture) || !IsWindowVisible(hwndCapture)))
                 {
-                    captureTexture->ReleaseDC();
+                    ReleaseCurrentHDC(hDC);
                     //bWindowMinimized = true;
 
                     if(!warningID)
@@ -295,8 +347,6 @@ public:
                 //CAPTUREBLT causes mouse flicker, so make capturing layered optional
                 if(!BitBlt(hDC, 0, 0, width, height, hCaptureDC, captureRect.left, captureRect.top, bCaptureLayered ? SRCCOPY|CAPTUREBLT : SRCCOPY))
                 {
-                    int chi = GetLastError();
-
                     RUNONCE AppWarning(TEXT("Capture BitBlt failed..  just so you know"));
                 }
             }
@@ -346,26 +396,19 @@ public:
                 }
             }
 
-            captureTexture->ReleaseDC();
+            ReleaseCurrentHDC(hDC);
         }
         else
         {
             RUNONCE AppWarning(TEXT("Failed to get DC from capture surface"));
         }
 
-        lastRendered = captureTexture;
-
-        if(++curCaptureTexture == NUM_CAPTURE_TEXTURES)
-            curCaptureTexture = 0;
-    }
-
-    void RenderWindows8MonitorCapture(const Vect2 &pos, const Vect2 &size)
-    {
-        
+        EndPreprocess();
     }
 
     void Render(const Vect2 &pos, const Vect2 &size)
     {
+        SamplerState *sampler = NULL;
         /*if(bWindows8MonitorCapture)
         {
             RenderWindows8MonitorCapture(pos, size);
@@ -374,6 +417,7 @@ public:
 
         Vect2 ulCoord = Vect2(0.0f, 0.0f),
               lrCoord = Vect2(1.0f, 1.0f);
+
         if(bWindows8MonitorCapture)
         {
             LONG monitorWidth  = monitorData.rect.right-monitorData.rect.left;
@@ -392,6 +436,8 @@ public:
 
         if(lastRendered)
         {
+            float fGamma = float(-(gamma-100) + 100) * 0.01f;
+
             Shader *lastPixelShader = GetCurrentPixelShader();
 
             float fOpacity = float(opacity)*0.01f;
@@ -400,6 +446,9 @@ public:
             if(bUseColorKey)
             {
                 LoadPixelShader(colorKeyShader);
+                HANDLE hGamma = colorKeyShader->GetParameterByName(TEXT("gamma"));
+                if(hGamma)
+                    colorKeyShader->SetFloat(hGamma, fGamma);
 
                 float fSimilarity = float(keySimilarity)*0.01f;
                 float fBlend      = float(keyBlend)*0.01f;
@@ -408,19 +457,34 @@ public:
                 colorKeyShader->SetFloat(colorKeyShader->GetParameter(3), fSimilarity);
                 colorKeyShader->SetFloat(colorKeyShader->GetParameter(4), fBlend);
 
-                DrawSpriteEx(lastRendered, (opacity255<<24) | 0xFFFFFF,
-                        pos.x, pos.y, pos.x+size.x, pos.y+size.y,
-                        ulCoord.x, ulCoord.y,
-                        lrCoord.x, lrCoord.y);
             }
             else
             {
                 LoadPixelShader(alphaIgnoreShader);
-                DrawSpriteEx(lastRendered, (opacity255<<24) | 0xFFFFFF,
-                        pos.x, pos.y, pos.x+size.x, pos.y+size.y,
-                        ulCoord.x, ulCoord.y,
-                        lrCoord.x, lrCoord.y);
+                HANDLE hGamma = alphaIgnoreShader->GetParameterByName(TEXT("gamma"));
+                if(hGamma)
+                    alphaIgnoreShader->SetFloat(hGamma, fGamma);
             }
+
+            if(bUsePointFiltering) {
+                SamplerInfo samplerinfo;
+                samplerinfo.filter = GS_FILTER_POINT;
+                sampler = CreateSamplerState(samplerinfo);
+                LoadSamplerState(sampler, 0);
+            }
+
+            if(bCompatibilityMode)
+                DrawSpriteEx(lastRendered, (opacity255<<24) | 0xFFFFFF,
+                    pos.x, pos.y+size.y, pos.x+size.x, pos.y,
+                    ulCoord.x, ulCoord.y,
+                    lrCoord.x, lrCoord.y);
+            else
+                DrawSpriteEx(lastRendered, (opacity255<<24) | 0xFFFFFF,
+                    pos.x, pos.y, pos.x+size.x, pos.y+size.y,
+                    ulCoord.x, ulCoord.y,
+                    lrCoord.x, lrCoord.y);
+
+            if(bUsePointFiltering) delete(sampler);
 
             LoadPixelShader(lastPixelShader);
 
@@ -440,7 +504,7 @@ public:
                     newCursorPos += pos;
                     newCursorSize *= sizeMultiplier;
 
-                    DrawSprite(cursorTexture, 0xFFFFFFFF, newCursorPos.x, newCursorPos.y+newCursorSize.y, newCursorPos.x+newCursorSize.x, newCursorPos.y);
+                    DrawSprite(cursorTexture, 0xFFFFFFFF, newCursorPos.x, newCursorPos.y, newCursorPos.x+newCursorSize.x, newCursorPos.y+newCursorSize.y);
                 }
             }
         }
@@ -463,10 +527,20 @@ public:
         bCaptureMouse   = data->GetInt(TEXT("captureMouse"), 1);
         bCaptureLayered = data->GetInt(TEXT("captureLayered"), 0);
 
+        bool bNewUsePointFiltering = data->GetInt(TEXT("usePointFiltering"), 0) != 0;
+
         int x  = data->GetInt(TEXT("captureX"));
         int y  = data->GetInt(TEXT("captureY"));
         int cx = data->GetInt(TEXT("captureCX"), 32);
         int cy = data->GetInt(TEXT("captureCY"), 32);
+
+        bool bNewCompatibleMode = data->GetInt(TEXT("compatibilityMode")) != 0;
+        if(bNewCompatibleMode && (OSGetVersion() >= 8 && newCaptureType == 0))
+            bNewCompatibleMode = false;
+
+        gamma = data->GetInt(TEXT("gamma"), 100);
+        if(gamma < 50)        gamma = 50;
+        else if(gamma > 175)  gamma = 175;
 
         UINT newMonitor = data->GetInt(TEXT("monitor"));
         if(newMonitor > App->NumMonitors())
@@ -474,7 +548,8 @@ public:
 
         if( captureRect.left != x || captureRect.right != (x+cx) || captureRect.top != cy || captureRect.bottom != (y+cy) ||
             newCaptureType != captureType || !strNewWindowClass.CompareI(strWindowClass) || !strNewWindow.CompareI(strWindow) ||
-            bNewClientCapture != bClientCapture || (OSGetVersion() >= 8 && newMonitor != monitor))
+            bNewClientCapture != bClientCapture || (OSGetVersion() >= 8 && newMonitor != monitor) ||
+            bNewCompatibleMode != bCompatibilityMode)
         {
             for(int i=0; i<NUM_CAPTURE_TEXTURES; i++)
             {
@@ -494,12 +569,26 @@ public:
                 cursorTexture = NULL;
             }
 
+            if(bCompatibilityMode)
+            {
+                SelectObject(hdcCompatible, hbmpOld);
+                DeleteDC(hdcCompatible);
+                DeleteObject(hbmpCompatible);
+
+                hdcCompatible = NULL;
+                hbmpCompatible = NULL;
+                captureBits = NULL;
+            }
+
             hCurrentCursor = NULL;
 
             captureType        = newCaptureType;
             strWindow          = strNewWindow;
             strWindowClass     = strNewWindowClass;
             bClientCapture     = bNewClientCapture;
+
+            bCompatibilityMode = bNewCompatibleMode;
+            bUsePointFiltering = bNewUsePointFiltering;
 
             captureRect.left   = x;
             captureRect.top    = y;
@@ -532,8 +621,28 @@ public:
             width  = cx;
             height = cy;
 
+            if(bCompatibilityMode)
+            {
+                hdcCompatible = CreateCompatibleDC(NULL);
+
+                BITMAPINFO bi;
+                zero(&bi, sizeof(bi));
+
+                BITMAPINFOHEADER &bih = bi.bmiHeader;
+                bih.biSize = sizeof(bih);
+                bih.biBitCount = 32;
+                bih.biWidth  = width;
+                bih.biHeight = height;
+                bih.biPlanes = 1;
+
+                hbmpCompatible = CreateDIBSection(hdcCompatible, &bi, DIB_RGB_COLORS, (void**)&captureBits, NULL, 0);
+                hbmpOld = (HBITMAP)SelectObject(hdcCompatible, hbmpCompatible);
+            }
+
             if(bWindows8MonitorCapture)
                 duplicator = GS->CreateOutputDuplicator(deviceOutputID);
+            else if(bCompatibilityMode)
+                renderTextures[0] = CreateTexture(width, height, GS_BGRA, NULL, FALSE, FALSE);
             else
             {
                 for(UINT i=0; i<NUM_CAPTURE_TEXTURES; i++)
@@ -547,6 +656,7 @@ public:
         keyColor        = data->GetInt(TEXT("keyColor"), 0xFFFFFFFF);
         keySimilarity   = data->GetInt(TEXT("keySimilarity"), 10);
         keyBlend        = data->GetInt(TEXT("keyBlend"), 0);
+        bUsePointFiltering = data->GetInt(TEXT("usePointFiltering"), 0) != 0;
 
         bUseColorKey = bNewUseColorKey;
 
@@ -578,6 +688,12 @@ public:
         {
             opacity = (UINT)iVal;
         }
+        else if(scmpi(lpName, TEXT("gamma")) == 0)
+        {
+            gamma = iVal;
+            if(gamma < 50)        gamma = 50;
+            else if(gamma > 175)  gamma = 175;
+        }
     }
 };
 
@@ -601,8 +717,6 @@ void RefreshWindowList(HWND hwndCombobox, StringList &classList)
         {
             RECT clientRect;
             GetClientRect(hwndCurrent, &clientRect);
-
-            HWND hwndParent = GetParent(hwndCurrent);
 
             DWORD exStyles = (DWORD)GetWindowLongPtr(hwndCurrent, GWL_EXSTYLE);
             DWORD styles = (DWORD)GetWindowLongPtr(hwndCurrent, GWL_STYLE);
@@ -914,9 +1028,13 @@ LRESULT WINAPI RegionWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
 
             HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
             HFONT hfontOld = (HFONT)SelectObject(hDC, hFont);
-
+            
+            SIZE textExtent;
+            GetTextExtentPoint32(hDC, lpStr, slen(lpStr), &textExtent);
+            
+            SetBkMode(hDC, TRANSPARENT);
             SetTextAlign(hDC, TA_CENTER);
-            TextOut(hDC, clientRect.right/2, clientRect.bottom/2, lpStr, slen(lpStr));
+            TextOut(hDC, clientRect.right/2, (clientRect.bottom - textExtent.cy)/2, lpStr, slen(lpStr));
 
             //-----------------------------------------
 
@@ -1176,15 +1294,18 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
 
                 //-----------------------------------------------------
 
-                bool bMouseCapture = data->GetInt(TEXT("captureMouse"), 1) != FALSE;
+                bool bMouseCapture = data->GetInt(TEXT("captureMouse"), 1) != 0;
                 SendMessage(GetDlgItem(hwnd, IDC_CAPTUREMOUSE), BM_SETCHECK, (bMouseCapture) ? BST_CHECKED : BST_UNCHECKED, 0);
 
-                bool bCaptureLayered = data->GetInt(TEXT("captureLayered"), 0) != FALSE;
+                bool bCaptureLayered = data->GetInt(TEXT("captureLayered"), 0) != 0;
                 SendMessage(GetDlgItem(hwnd, IDC_CAPTURELAYERED), BM_SETCHECK, (bCaptureLayered) ? BST_CHECKED : BST_UNCHECKED, 0);
 
                 ti.lpszText = (LPWSTR)Str("Sources.SoftwareCaptureSource.CaptureLayeredTip");
                 ti.uId = (UINT_PTR)GetDlgItem(hwnd, IDC_CAPTURELAYERED);
                 SendMessage(hwndToolTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+                bool bCompatibilityMode = data->GetInt(TEXT("compatibilityMode"), 0) != 0;
+                SendMessage(GetDlgItem(hwnd, IDC_COMPATIBILITYMODE), BM_SETCHECK, (bCompatibilityMode) ? BST_CHECKED : BST_UNCHECKED, 0);
 
                 //-----------------------------------------------------
 
@@ -1235,6 +1356,9 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                 DWORD keyColor      = data->GetInt(TEXT("keyColor"), 0xFFFFFFFF);
                 UINT  similarity    = data->GetInt(TEXT("keySimilarity"), 10);
                 UINT  blend         = data->GetInt(TEXT("keyBlend"), 0);
+                
+                BOOL  bUsePointFiltering = data->GetInt(TEXT("usePointFiltering"), 0);
+                SendMessage(GetDlgItem(hwnd, IDC_POINTFILTERING), BM_SETCHECK, bUsePointFiltering ? BST_CHECKED : BST_UNCHECKED, 0);
 
                 SendMessage(GetDlgItem(hwnd, IDC_USECOLORKEY), BM_SETCHECK, bUseColorKey ? BST_CHECKED : BST_UNCHECKED, 0);
                 CCSetColor(GetDlgItem(hwnd, IDC_COLOR), keyColor);
@@ -1258,6 +1382,20 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
 
                 SendMessage(GetDlgItem(hwnd, IDC_OPACITY2), UDM_SETRANGE32, 0, 100);
                 SendMessage(GetDlgItem(hwnd, IDC_OPACITY2), UDM_SETPOS32, 0, opacity);
+
+                //------------------------------------------
+
+                int gammaVal = data->GetInt(TEXT("gamma"), 100);
+
+                hwndTemp = GetDlgItem(hwnd, IDC_GAMMA);
+                SendMessage(hwndTemp, TBM_CLEARTICS, FALSE, 0);
+                SendMessage(hwndTemp, TBM_SETRANGE, FALSE, MAKELPARAM(50, 175));
+                SendMessage(hwndTemp, TBM_SETTIC, 0, 100);
+                SendMessage(hwndTemp, TBM_SETPOS, TRUE, gammaVal);
+
+                SetSliderText(hwnd, IDC_GAMMA, IDC_GAMMAVAL);
+
+                //--------------------------------------------
 
                 return TRUE;
             }
@@ -1323,17 +1461,40 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
             }
             break;
 
+        case WM_HSCROLL:
+            {
+                if(GetDlgCtrlID((HWND)lParam) == IDC_GAMMA)
+                {
+                    int gamma = SetSliderText(hwnd, IDC_GAMMA, IDC_GAMMAVAL);
+
+                    ConfigDesktopSourceInfo *configData = (ConfigDesktopSourceInfo*)GetWindowLongPtr(hwnd, DWLP_USER);
+                    ImageSource *source = API->GetSceneImageSource(configData->lpName);
+                    if(source)
+                        source->SetInt(TEXT("gamma"), gamma);
+                }
+            }
+            break;
+
         case WM_COMMAND:
             switch(LOWORD(wParam))
             {
                 case IDC_MONITORCAPTURE:
                     SetDesktopCaptureType(hwnd, 0);
                     PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_MONITOR, 0), 0);
+
+                    if(OSGetVersion() >= 8)
+                    {
+                        EnableWindow(GetDlgItem(hwnd, IDC_COMPATIBILITYMODE), FALSE);
+                        SendMessage(GetDlgItem(hwnd, IDC_COMPATIBILITYMODE), BM_SETCHECK, BST_UNCHECKED, 0);
+                    }
                     break;
 
                 case IDC_WINDOWCAPTURE:
                     SetDesktopCaptureType(hwnd, 1);
                     PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_WINDOW, 0), 0);
+
+                    if(OSGetVersion() >= 8)
+                        EnableWindow(GetDlgItem(hwnd, IDC_COMPATIBILITYMODE), TRUE);
                     break;
 
                 case IDC_REGIONCAPTURE:
@@ -1435,10 +1596,36 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                         //--------------------------------------------
 
                         regionWindowData.hwndConfigDialog = hwnd;
-                        HWND hwndRegion = CreateWindowEx(0, CAPTUREREGIONCLASS, NULL, WS_POPUP|WS_VISIBLE, posX, posY, sizeX, sizeY, hwnd, NULL, hinstMain, NULL);
-                        //SetLayeredWindowAttributes(hwndRegion, 0xFFFFFF, 0x7F, LWA_ALPHA);
+                        HWND hwndRegion = CreateWindowEx(WS_EX_TOPMOST, CAPTUREREGIONCLASS, NULL, WS_POPUP|WS_VISIBLE, posX, posY, sizeX, sizeY, hwnd, NULL, hinstMain, NULL);
+
+                        //everyone better thank homeworld for this
+                        SetWindowLongW(hwndRegion, GWL_EXSTYLE, GetWindowLong(hwndRegion, GWL_EXSTYLE) | WS_EX_LAYERED);
+                        SetLayeredWindowAttributes(hwndRegion, 0x000000, 0xC0, LWA_ALPHA);
                         break;
                     }
+
+                case IDC_SETSTREAMSIZE:
+                    {
+                        UINT sizeX = (UINT)GetEditText(GetDlgItem(hwnd, IDC_SIZEX)).ToInt();
+                        UINT sizeY = (UINT)GetEditText(GetDlgItem(hwnd, IDC_SIZEY)).ToInt();
+
+                        if(sizeX < 128)
+                            sizeX = 128;
+                        else if(sizeX > 4096)
+                            sizeX = 4096;
+
+                        if(sizeY < 128)
+                            sizeY = 128;
+                        else if(sizeY > 4096)
+                            sizeY = 4096;
+
+                        AppConfig->SetInt(TEXT("Video"), TEXT("BaseWidth"), sizeX);
+                        AppConfig->SetInt(TEXT("Video"), TEXT("BaseHeight"), sizeY);
+
+                        if(!App->IsRunning())
+                            App->ResizeWindow(false);
+                    }
+                    break;
 
                 case IDC_MONITOR:
                     {
@@ -1618,6 +1805,8 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
 
                         BOOL bCaptureMouse = SendMessage(GetDlgItem(hwnd, IDC_CAPTUREMOUSE), BM_GETCHECK, 0, 0) == BST_CHECKED;
                         BOOL bCaptureLayered = SendMessage(GetDlgItem(hwnd, IDC_CAPTURELAYERED), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        BOOL bCompatibilityMode = SendMessage(GetDlgItem(hwnd, IDC_COMPATIBILITYMODE), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        BOOL bUsePointFiltering = SendMessage(GetDlgItem(hwnd, IDC_POINTFILTERING), BM_GETCHECK, 0, 0) == BST_CHECKED;
 
                         //---------------------------------
 
@@ -1641,6 +1830,10 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
 
                         data->SetInt(TEXT("captureLayered"), bCaptureLayered);
 
+                        data->SetInt(TEXT("compatibilityMode"), bCompatibilityMode);
+
+                        data->SetInt(TEXT("usePointFiltering"), bUsePointFiltering);
+
                         data->SetInt(TEXT("captureX"),      posX);
                         data->SetInt(TEXT("captureY"),      posY);
                         data->SetInt(TEXT("captureCX"),     sizeX);
@@ -1662,6 +1855,11 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
 
                         UINT opacity = (UINT)SendMessage(GetDlgItem(hwnd, IDC_OPACITY2), UDM_GETPOS32, 0, 0);
                         data->SetInt(TEXT("opacity"), opacity);
+
+                        //---------------------------------
+
+                        int gamma = (int)SendMessage(GetDlgItem(hwnd, IDC_GAMMA), TBM_GETPOS, 0, 0);
+                        data->SetInt(TEXT("gamma"), gamma);
                     }
 
                 case IDCANCEL:
@@ -1677,6 +1875,7 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                             source->SetInt(TEXT("keySimilarity"), data->GetInt(TEXT("keySimilarity"), 10));
                             source->SetInt(TEXT("keyBlend"),      data->GetInt(TEXT("keyBlend"), 0));
                             source->SetInt(TEXT("opacity"),       data->GetInt(TEXT("opacity"), 100));
+                            source->SetInt(TEXT("gamma"),         data->GetInt(TEXT("gamma"), 100));
                         }
                     }
 
